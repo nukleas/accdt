@@ -8,7 +8,8 @@ use std::fmt;
 use crate::design::{Control, ControlKind, DesignItem, GroupLevel, SectionKind};
 use crate::package::{ResolvedObject, ResolvedRecordSource};
 use crate::{
-    BoundColumn, ColumnWidth, Design, DesignKind, DisplayFormat, Macro, Package, RowSource, Table,
+    BoundColumn, ColumnWidth, Design, DesignKind, DisplayFormat, Lookup, Macro, Package, RowSource,
+    Table,
 };
 
 #[derive(Debug, Clone)]
@@ -297,6 +298,50 @@ fn describe_group(g: &GroupLevel<'_>) -> GroupDescription {
     }
 }
 
+/// The typed [`Lookup`] of a control or a table field, flattened for display.
+fn lookup_description(l: &Lookup<'_>) -> LookupDescription {
+    LookupDescription {
+        kind: match &l.source {
+            RowSource::Empty => "empty",
+            RowSource::Values(_) => "values",
+            RowSource::Sql(_) => "sql",
+            RowSource::Named(_) => "named",
+            RowSource::FieldList(_) => "field-list",
+            RowSource::Callback { .. } => "callback",
+        }
+        .into(),
+        values: match &l.source {
+            RowSource::Values(v) => {
+                let col = l.display_column().unwrap_or(0);
+                v.rows
+                    .iter()
+                    .map(|r| r.get(col).cloned().unwrap_or_default())
+                    .collect()
+            }
+            _ => Vec::new(),
+        },
+        sql: match &l.source {
+            RowSource::Sql(s) => Some(s.to_string()),
+            _ => None,
+        },
+        named: match &l.source {
+            RowSource::Named(s) | RowSource::FieldList(s) => Some(s.to_string()),
+            _ => None,
+        },
+        column_count: l.column_count,
+        bound_column: match l.bound {
+            BoundColumn::RowIndex => "row index".into(),
+            BoundColumn::Column(i) => (i + 1).to_string(),
+        },
+        display_column: l.display_column().map(|i| i + 1).or_else(|| {
+            l.widths
+                .iter()
+                .all(|w| matches!(w, ColumnWidth::Auto))
+                .then_some(1)
+        }),
+    }
+}
+
 fn describe_control(
     c: Control<'_>,
     design: &Design,
@@ -323,46 +368,7 @@ fn describe_control(
         p = parent.parent();
     }
     let lookup = match c.lookup() {
-        Ok(l) => l.map(|l| LookupDescription {
-            kind: match &l.source {
-                RowSource::Empty => "empty",
-                RowSource::Values(_) => "values",
-                RowSource::Sql(_) => "sql",
-                RowSource::Named(_) => "named",
-                RowSource::FieldList(_) => "field-list",
-                RowSource::Callback { .. } => "callback",
-            }
-            .into(),
-            values: match &l.source {
-                RowSource::Values(v) => {
-                    let col = l.display_column().unwrap_or(0);
-                    v.rows
-                        .iter()
-                        .map(|r| r.get(col).cloned().unwrap_or_default())
-                        .collect()
-                }
-                _ => Vec::new(),
-            },
-            sql: match &l.source {
-                RowSource::Sql(s) => Some(s.to_string()),
-                _ => None,
-            },
-            named: match &l.source {
-                RowSource::Named(s) | RowSource::FieldList(s) => Some(s.to_string()),
-                _ => None,
-            },
-            column_count: l.column_count,
-            bound_column: match l.bound {
-                BoundColumn::RowIndex => "row index".into(),
-                BoundColumn::Column(i) => (i + 1).to_string(),
-            },
-            display_column: l.display_column().map(|i| i + 1).or_else(|| {
-                l.widths
-                    .iter()
-                    .all(|w| matches!(w, ColumnWidth::Auto))
-                    .then_some(1)
-            }),
-        }),
+        Ok(l) => l.map(|l| lookup_description(&l)),
         Err(e) => {
             diagnostics.push(e.to_string());
             None
@@ -651,7 +657,11 @@ impl TableDescription {
                     default_value: c.property("DefaultValue").map(String::from),
                     validation_rule: c.property("ValidationRule").map(String::from),
                     format: c.property("Format").map(String::from),
-                    lookup: column_lookup(c),
+                    lookup: table
+                        .column_lookup(&c.name)
+                        .ok()
+                        .flatten()
+                        .map(|l| lookup_description(&l)),
                     description: c.description().map(String::from),
                 })
                 .collect(),
@@ -684,61 +694,6 @@ impl TableDescription {
                 }),
         }
     }
-}
-
-/// A field-level lookup: `RowSourceType` + `RowSource` field properties, shown by a combo or
-/// list box (`DisplayControl` 111 / 110).
-fn column_lookup(c: &crate::Column) -> Option<LookupDescription> {
-    let display = c.property("DisplayControl")?;
-    if !matches!(display, "110" | "111") {
-        return None;
-    }
-    let raw = c.property("RowSource").unwrap_or("");
-    let kind = c.property("RowSourceType").unwrap_or("");
-    let values: Vec<String> = if kind.eq_ignore_ascii_case("Value List") {
-        raw.split(';')
-            .map(|v| v.trim().trim_matches('"').to_string())
-            .filter(|v| !v.is_empty())
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let column_count: usize = c
-        .property("ColumnCount")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
-    let bound: usize = c
-        .property("BoundColumn")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
-    let widths: Vec<i64> = c
-        .property("ColumnWidths")
-        .map(|w| w.split(';').filter_map(|x| x.trim().parse().ok()).collect())
-        .unwrap_or_default();
-    Some(LookupDescription {
-        kind: if kind.eq_ignore_ascii_case("Value List") {
-            "values"
-        } else if raw.trim_start().to_ascii_uppercase().starts_with("SELECT") {
-            "sql"
-        } else if raw.is_empty() {
-            "empty"
-        } else {
-            "named"
-        }
-        .into(),
-        values,
-        sql: (!raw.is_empty() && !kind.eq_ignore_ascii_case("Value List")).then(|| raw.to_string()),
-        named: None,
-        column_count,
-        bound_column: bound.to_string(),
-        // Widths are listed from the first column; an unlisted column has its default width.
-        display_column: widths
-            .iter()
-            .position(|w| *w != 0)
-            .map(|i| i + 1)
-            .or_else(|| (column_count > widths.len()).then_some(widths.len() + 1))
-            .or(Some(1)),
-    })
 }
 
 impl fmt::Display for TableDescription {

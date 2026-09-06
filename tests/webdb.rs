@@ -5,11 +5,10 @@
 
 use accdt::{ObjectKind, Package, PartFormat, SqlSource};
 
+mod common;
+
 fn open(name: &str) -> Option<Package> {
-    let p = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
-    std::path::Path::new(&p)
-        .exists()
-        .then(|| Package::open(&p).unwrap())
+    common::optional(name)
 }
 
 #[test]

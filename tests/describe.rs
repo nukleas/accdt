@@ -2,8 +2,10 @@
 //! sample-data cells (Filters rows here; dates and currency from Northwind 2.0).
 use accdt::{Cell, DesignDescription, DesignKind, Package, TableDescription, Value};
 
+mod common;
+
 fn projects() -> Option<Package> {
-    Package::open("tests/fixtures/project-management.accdt").ok()
+    common::optional(common::PROJECTS)
 }
 
 #[test]
@@ -240,7 +242,7 @@ fn table_description_and_typed_cells() {
 
 #[test]
 fn northwind_dates_and_currency_decode() {
-    let Ok(pkg) = Package::open("tests/fixtures/northwind-2.0-dev.accdt") else {
+    let Some(pkg) = common::required(common::NORTHWIND) else {
         return;
     };
     let t = pkg.table("PurchaseOrders").unwrap();

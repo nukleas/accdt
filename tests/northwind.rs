@@ -3,21 +3,10 @@
 
 use accdt::{JetType, ObjectKind, Package, SqlSource, Value};
 
-/// The fixture is required: run `scripts/fetch-fixtures.sh` once.
+mod common;
+
 fn open() -> Option<Package> {
-    let p = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/northwind-2.0-dev.accdt"
-    );
-    if !std::path::Path::new(p).exists() {
-        if std::env::var_os("ACCDT_SKIP_FIXTURE_TESTS").is_some() {
-            return None;
-        }
-        panic!(
-            "fixture {p} is missing; run scripts/fetch-fixtures.sh (or set ACCDT_SKIP_FIXTURE_TESTS=1)"
-        );
-    }
-    Some(Package::open(p).unwrap())
+    common::required(common::NORTHWIND)
 }
 
 #[test]

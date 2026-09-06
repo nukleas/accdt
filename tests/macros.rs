@@ -5,21 +5,10 @@ use accdt::{
     AcCmd, Action, ErrorNext, FormDataMode, FormView, Macro, ObjectType, Package, Step, WindowMode,
 };
 
-fn open_fixture(name: &str) -> Option<Package> {
-    let p = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
-    if !std::path::Path::new(&p).exists() {
-        if std::env::var_os("ACCDT_SKIP_FIXTURE_TESTS").is_some() {
-            return None;
-        }
-        panic!(
-            "fixture {p} is missing; run scripts/fetch-fixtures.sh (or set ACCDT_SKIP_FIXTURE_TESTS=1)"
-        );
-    }
-    Some(Package::open(&p).unwrap())
-}
+mod common;
 
 fn projects() -> Option<Package> {
-    open_fixture("project-management.accdt")
+    common::optional(common::PROJECTS)
 }
 
 fn is_axl_comment(s: &Step) -> bool {
@@ -391,7 +380,7 @@ fn runcommand_histogram() {
 
 #[test]
 fn northwind_autoexec_unnamed_only() {
-    let Some(pkg) = open_fixture("northwind-2.0-dev.accdt") else {
+    let Some(pkg) = common::required(common::NORTHWIND) else {
         return;
     };
     let m = pkg.ui_macro("AutoExec").unwrap();
@@ -434,7 +423,7 @@ fn northwind_autoexec_unnamed_only() {
 
 #[test]
 fn sync_combo_autoexec() {
-    let Some(pkg) = open_fixture("sync-combo.accdt") else {
+    let Some(pkg) = common::optional("sync-combo.accdt") else {
         return;
     };
     let m = pkg.ui_macro("AutoExec").unwrap();

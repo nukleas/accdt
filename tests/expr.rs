@@ -5,6 +5,8 @@ use accdt::expr::{
 };
 use accdt::{Package, SqlSource, Value};
 
+mod common;
+
 fn sqlite(s: &str) -> String {
     parse_expr(s)
         .unwrap_or_else(|e| panic!("{s:?}: {e}"))
@@ -234,21 +236,8 @@ fn replace_and_date_time() {
     assert_eq!(sqlite("Time()"), "time('now')");
 }
 
-fn open_fixture(name: &str) -> Option<Package> {
-    let p = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
-    if !std::path::Path::new(&p).exists() {
-        if std::env::var_os("ACCDT_SKIP_FIXTURE_TESTS").is_some() {
-            return None;
-        }
-        panic!(
-            "fixture {p} is missing; run scripts/fetch-fixtures.sh (or set ACCDT_SKIP_FIXTURE_TESTS=1)"
-        );
-    }
-    Some(Package::open(&p).unwrap())
-}
-
 fn projects() -> Option<Package> {
-    open_fixture("project-management.accdt")
+    common::optional(common::PROJECTS)
 }
 
 #[test]
@@ -459,7 +448,7 @@ fn projects_employee_phone_list_and_tasks_subreport() {
 
 #[test]
 fn marketing_queries_translate() {
-    let Some(pkg) = open_fixture("marketing-projects.accdt") else {
+    let Some(pkg) = common::optional("marketing-projects.accdt") else {
         return;
     };
     for q in pkg.queries().unwrap() {
@@ -483,7 +472,7 @@ fn marketing_queries_translate() {
 
 #[test]
 fn northwind_stored_sql_is_not_translated() {
-    let Some(pkg) = open_fixture("northwind-2.0-dev.accdt") else {
+    let Some(pkg) = common::required(common::NORTHWIND) else {
         return;
     };
     let q = pkg.query("qrycboProductCategories").unwrap();

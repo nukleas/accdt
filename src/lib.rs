@@ -9,12 +9,30 @@
 //!
 //! ```no_run
 //! let pkg = accdt::Package::open("northwind.accdt")?;
-//! for table in pkg.tables()? {
-//!     println!("{} ({} rows)", table.name, table.rows.len());
+//!
+//! for t in pkg.tables()? {
+//!     let pk = t.primary_key().map(|i| i.columns.join(", ")).unwrap_or_default();
+//!     println!("{} ({} rows, pk {pk})", t.name, t.rows.len());
 //! }
-//! for form in pkg.forms()? {
-//!     println!("{}: {} controls", form.name(), form.controls().len());
+//!
+//! for f in pkg.forms()? {
+//!     println!("{} on {:?}", f.name(), f.record_source());
+//!     for c in f.controls() {
+//!         println!("  {:?} {} in {:?}", c.kind(), c.name(), c.section().map(|s| s.kind()));
+//!     }
+//!     for (owner_event, m) in f.embedded_macros()? {
+//!         println!("  macro {owner_event}: {} steps", m.entry().steps.len());
+//!     }
 //! }
+//!
+//! for q in pkg.queries()? {
+//!     println!("{}: {}", q.name, q.to_sql().text);        // Access SQL
+//!     println!("{}: {}", q.name, q.to_sqlite()?.text);    // translated
+//! }
+//!
+//! // One page per object: sources, controls, lookups, links, events, group levels.
+//! let form = pkg.form("Home")?;
+//! print!("{}", accdt::DesignDescription::new(&form, Some(&pkg), false));
 //! # Ok::<(), accdt::Error>(())
 //! ```
 //!
@@ -30,6 +48,7 @@
 mod axl;
 mod database;
 mod datamacro;
+pub mod describe;
 mod design;
 mod error;
 pub mod expr;
@@ -43,7 +62,18 @@ pub mod text;
 pub use axl::{ListDefinition, ListField};
 pub use database::{CoreProperties, Property, Relationship, TemplateInfo, VbaReference};
 pub use datamacro::{DataMacro, DataMacroAction};
-pub use design::{Control, Design, DesignKind, Event, Layout};
+pub use describe::{
+    ColumnDescription, ControlDescription, DesignDescription, EventDescription, GroupDescription,
+    LookupDescription, SectionDescription, SharePointDescription, SourceDescription,
+    SubformDescription, TableDescription,
+};
+pub use design::{
+    BackStyle, BoundColumn, ColumnWidth, Control, ControlKind, DecimalPlaces, DefaultView, Design,
+    DesignItem, DesignKind, DisplayFormat, EmbeddedSource, Event, GroupKeepTogether, GroupLevel,
+    GroupOn, Layout, LinkField, Lookup, NamedFormat, NodeId, PropertyError, PropertyOrigin,
+    PropertyResult, RecordSource, Resolved, RowSource, Section, SectionKind, SortDirection,
+    SubformLink, TextAlign, ValueList,
+};
 pub use error::{Error, Result};
 pub use expr::{
     BinaryOp, Expr, Param, RenderOpts, UnaryOp, parse_control_source, parse_default_value,
@@ -53,31 +83,12 @@ pub use macros::{
     AcCmd, Action, DataMode, ErrorNext, FormDataMode, FormView, Macro, MsgBoxType, ObjectType,
     PropertyNum, Record, ReportView, SaveMode, Step, Submacro, View, WindowMode,
 };
-pub use package::{Module, ObjectEntry, ObjectKind, Package, PartFormat, Resource, Variation};
+pub use package::{
+    Module, ObjectEntry, ObjectKind, Package, PartFormat, ResolvedObject, ResolvedRecordSource,
+    Resource, Variation,
+};
 pub use query::{Join, Operation, OutputColumn, Query, QueryDef, Sql, SqlSource};
-pub use table::{Column, Index, JetType, SharePointMetadata, Table, Value};
-
-pub use design::{
-    BackStyle, ControlKind, DecimalPlaces, DefaultView, DesignItem, DisplayFormat, NamedFormat,
-    PropertyError, PropertyOrigin, PropertyResult, Resolved, Section, SectionKind, TextAlign,
-};
-
-pub use design::NodeId;
-
-pub use design::{
-    BoundColumn, ColumnWidth, EmbeddedSource, GroupKeepTogether, GroupLevel, GroupOn, LinkField,
-    Lookup, RecordSource, RowSource, SortDirection, SubformLink, ValueList,
-};
-pub use package::{ResolvedObject, ResolvedRecordSource};
-
 pub use table::{
-    Cell, ComplexRecord, Currency, Decimal, ExpandedName, NullEncoding, Restriction, Row,
-    ValueError, XmlDateTime,
-};
-
-pub mod describe;
-pub use describe::{
-    ColumnDescription, ControlDescription, DesignDescription, EventDescription, GroupDescription,
-    LookupDescription, SectionDescription, SharePointDescription, SourceDescription,
-    SubformDescription, TableDescription,
+    Cell, Column, ComplexRecord, Currency, Decimal, ExpandedName, Index, JetType, NullEncoding,
+    Restriction, Row, SharePointMetadata, Table, Value, ValueError, XmlDateTime,
 };

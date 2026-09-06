@@ -8,6 +8,11 @@ repository = "https://github.com/nukleas/accdt"
 keywords = ["access", "accdt", "msaccess", "jet", "vba"]
 categories = ["parser-implementations", "database"]
 readme = "README.md"
+# Let chains (`if let ... && let ...`) in edition 2024.
+rust-version = "1.88"
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 base64 = "0.22"

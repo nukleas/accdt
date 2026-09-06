@@ -737,6 +737,23 @@ impl Table {
         self.sharepoint_metadata.is_some() && !self.has_data_part
     }
 
+    /// A field's lookup, when Access shows it as a combo or list box (`DisplayControl` 111
+    /// or 110): the row source classified, column count, widths and bound column, in the
+    /// same [`Lookup`](crate::Lookup) a lookup control on a form carries. `Ok(None)` when the
+    /// field is not displayed as a lookup, and `Err` when its properties disagree.
+    pub fn column_lookup(
+        &self,
+        column: &str,
+    ) -> Result<Option<crate::Lookup<'_>>, crate::PropertyError> {
+        let Some(c) = self.column(column) else {
+            return Ok(None);
+        };
+        if !matches!(c.property("DisplayControl"), Some("110") | Some("111")) {
+            return Ok(None);
+        }
+        crate::design::lookup(&self.name, &c.name, false, |key| c.property(key)).map(Some)
+    }
+
     /// Column by name, case-insensitively (Access names are case-insensitive).
     pub fn column(&self, name: &str) -> Option<&Column> {
         self.columns

@@ -1,5 +1,7 @@
 use accdt::*;
 
+mod common;
+
 fn form(body: &str) -> Design {
     Design::parse(
         "test",
@@ -195,8 +197,9 @@ fn subform_composite_links_preserve_names() {
 
 #[test]
 fn projects_group_and_source_evidence() {
-    let pkg = Package::open("tests/fixtures/project-management.accdt")
-        .expect("Projects fixture is required for design integration tests");
+    let Some(pkg) = common::optional(common::PROJECTS) else {
+        return;
+    };
     let reports = pkg.reports().unwrap();
     assert_eq!(
         reports

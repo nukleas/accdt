@@ -16,29 +16,26 @@ let pkg = accdt::Package::open("northwind.accdt")?;
 for t in pkg.tables()? {
     let pk = t.primary_key().map(|i| i.columns.join(", ")).unwrap_or_default();
     println!("{} ({} rows, pk {pk})", t.name, t.rows.len());
-    for c in &t.columns {
-        println!("  {} {:?} {}", c.name, c.jet_type, c.sql_type.as_deref().unwrap_or(""));
-    }
 }
+
 for f in pkg.forms()? {
-    println!("{}: source {:?}", f.name, f.record_source());
-    for c in f.controls()? {
-        println!("  {} {} in {}", c.control_type, c.name, c.section);
-    }
-    for e in f.events()? {
-        println!("  {}.{} -> {}", e.owner, e.event, e.value);
+    println!("{} on {:?}", f.name(), f.record_source());
+    for c in f.controls() {
+        println!("  {:?} {} in {:?}", c.kind(), c.name(), c.section().map(|s| s.kind()));
     }
     for (owner_event, m) in f.embedded_macros()? {
         println!("  macro {owner_event}: {} steps", m.entry().steps.len());
     }
 }
+
 for q in pkg.queries()? {
-    let sql = q.to_sql();
-    println!("{}: {} ({:?}{})", q.name, sql.text, sql.source, if sql.complete { "" } else { ", partial" });
+    println!("{}: {}", q.name, q.to_sql().text);        // Access SQL
+    println!("{}: {}", q.name, q.to_sqlite()?.text);    // translated
 }
-for r in pkg.vba_references()? {
-    println!("{} {}", r.guid, r.known_name().unwrap_or("?"));
-}
+
+// One page per object: sources, controls, lookups, links, events, group levels.
+let form = pkg.form("Home")?;
+print!("{}", accdt::DesignDescription::new(&form, Some(&pkg), false));
 # Ok::<(), accdt::Error>(())
 ```
 
@@ -48,11 +45,12 @@ What is covered:
 |---|---|
 | `template/template.xml`, `docProps/core.xml` | `template()`, `core_properties()` |
 | `databaseProperties.xml` | `database_properties()` (AccessVersion, StartUpForm, AppTitle, …) |
-| Tables: `objects/table*.xsd` + `sampleData/*.xml` | `tables()`, `table(name)`: columns with `od:jetType`/`od:sqlSType`, required, autoincrement, max length, field properties; indexes; table properties; rows as typed cells (`Cell::{Null, Value, Invalid}` with the XML lexical value kept; `Value::{Text, Boolean, Integer, Double, Currency, Decimal, DateTime, Binary, Guid, Complex}`, attachment children with their own schema); `validate_values()`; `to_csv()` |
+| Tables: `objects/table*.xsd` + `sampleData/*.xml` | `tables()`, `table(name)`: columns with `od:jetType`/`od:sqlSType`, required, autoincrement, max length, field properties; indexes; table properties; rows as typed cells (`Cell::{Null, Value, Invalid}` with the XML lexical value kept; `Value::{Text, Boolean, Integer, Double, Currency, Decimal, DateTime, Binary, Guid, Complex}`, attachment children with their own schema); `validate_values()`; `column_lookup(field)` for a field displayed as a combo or list box; `to_csv()` |
 | `dataMacros/*.axl` | `data_macros(table)` |
 | Forms and reports (SaveAsText) | `forms()`, `reports()`, `form(name)`, `report(name)`: borrowed typed views (`sections()`, `controls()` with `ControlKind`, `is_visible()`/`is_enabled()`/`is_locked()`/`column_hidden()` decoding `NotDefault`, `default_view()`, `format()`, `decimal_places()`, `layout()`), `is_attached_label()`, `lookup()` (value lists vs SQL vs named row sources, bound and display columns), `subform_link()`, `record_source()` classified and resolved against the package, `group_levels()` from the report's `BreakLevel` blocks, events, embedded macros as parsed `Macro`s, code-behind VBA |
 | Macros (SaveAsText) | `macros()`, `ui_macro(name)`: submacros, `Step::When` for `...` condition groups, typed `Action` (OpenForm, RunCommand/`AcCmd`, …) |
-| Queries (SaveAsText) | `queries()`, `query(name)`: tables and aliases, columns, joins, where/having/group/order, parameters, properties; `to_sql()` returns the stored SQL when Access kept it (union, pass-through, `TOP`), otherwise rebuilds select, append (`INSERT INTO … SELECT`), update, delete and make-table queries with alias-aware joins and a `PARAMETERS` clause, and says which it did; crosstab, DDL and pass-through queries without stored SQL come back as a commented skeleton |
+| Queries (SaveAsText) | `queries()`, `query(name)`: tables and aliases, columns, joins, where/having/group/order, parameters, properties; `to_sql()` returns the stored SQL when Access kept it (union, pass-through, `TOP`), otherwise rebuilds select, append (`INSERT INTO … SELECT`), update, delete and make-table queries with alias-aware joins and a `PARAMETERS` clause, and says which it did; crosstab, DDL and pass-through queries without stored SQL come back as a commented skeleton. `to_sqlite()` translates every expression slot of a reconstructed query |
+| Expressions (query slots, `ControlSource`, `DefaultValue`, macro conditions, saved filter strings) | `expr::parse_expr` and friends return an `Expr` tree; `to_sqlite()` renders it (`[brackets]` quoted, `IIf`/`Nz`/`IsNull`/`CCur` lowered, `&` to `\|\|`, `Like` wildcards, `#dates#`), `Display` renders it back in Access syntax, `parameters()` lists the `Forms!`/`TempVars!`/`[Parent]!` references it needs bound |
 | Modules | `modules()`, `module(name)` |
 | Descriptions (what a port reads first) | `DesignDescription::new(design, package, all_controls)` and `TableDescription::new(table, package)`: owned, serialisable, with a text `Display`; `accdt describe` prints them |
 | `relationships.xml` | `relationships()` with integrity and cascade flags |
