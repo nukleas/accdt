@@ -1,0 +1,30 @@
+[package]
+name = "accdt"
+version = "0.1.0"
+edition = "2024"
+description = "Read Microsoft Access template packages (.accdt): tables with data, forms, reports, macros, queries, VBA modules, relationships and references, without Access"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nukleas/accdt"
+keywords = ["access", "accdt", "msaccess", "jet", "vba"]
+categories = ["parser-implementations", "database"]
+readme = "README.md"
+
+[dependencies]
+roxmltree = "0.21"
+thiserror = "2"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]
+cli = ["serde", "dep:serde_json", "dep:clap"]
+
+[[bin]]
+name = "accdt"
+required-features = ["cli"]
+
+[dev-dependencies]
+serde_json = "1"
