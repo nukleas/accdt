@@ -100,8 +100,10 @@ impl Namer {
     }
 }
 
-fn design_json(d: &accdt::Design) -> serde_json::Value {
-    serde_json::json!({"name": d.name(), "properties": d.properties(), "controls": d.controls().iter().map(|c| c.raw_node()).collect::<Vec<_>>(), "events": d.events(), "embedded_macros": d.embedded_macros(), "code_behind": d.code_behind(), "warnings": d.document().warnings})
+fn design_json(d: &accdt::Design) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    Ok(
+        serde_json::json!({"name": d.name(), "properties": d.properties(), "controls": d.controls().iter().map(|c| c.raw_node()).collect::<Vec<_>>(), "events": d.events(), "embedded_macros": d.embedded_macros()?, "code_behind": d.code_behind(), "warnings": d.document().warnings}),
+    )
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -259,9 +261,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         &serde_json::json!({"name": q.name, "definition": q.definition, "sql": q.to_sql()}),
                     )?
                 }
-                ObjectKind::Form => serde_json::to_string_pretty(&design_json(&pkg.form(&name)?))?,
+                ObjectKind::Form => serde_json::to_string_pretty(&design_json(&pkg.form(&name)?)?)?,
                 ObjectKind::Report => {
-                    serde_json::to_string_pretty(&design_json(&pkg.report(&name)?))?
+                    serde_json::to_string_pretty(&design_json(&pkg.report(&name)?)?)?
                 }
                 ObjectKind::Macro => serde_json::to_string_pretty(&pkg.ui_macro(&name)?)?,
                 ObjectKind::Module => serde_json::to_string_pretty(&pkg.module(&name)?)?,
@@ -346,7 +348,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     std::fs::write(dir.join(sub).join(format!("{f}.txt")), d.text())?;
                     std::fs::write(
                         dir.join(sub).join(format!("{f}.json")),
-                        serde_json::to_vec_pretty(&design_json(&d))?,
+                        serde_json::to_vec_pretty(&design_json(&d)?)?,
                     )?;
                     if let Some(code) = d.code_behind() {
                         std::fs::write(dir.join(sub).join(format!("{f}.bas")), code)?;

@@ -81,7 +81,7 @@ fn contacts_web_database_reads_axl_objects() {
         ctrls.iter().map(|c| c.name()).collect::<Vec<_>>()
     );
     assert!(list.sections().iter().any(|s| s.name() == "Detail"));
-    let macros = list.embedded_macros();
+    let macros = list.embedded_macros().unwrap();
     assert!(!macros.is_empty(), "UI macros become embedded macros");
     assert!(list.events().iter().any(|e| e.value == "[Embedded Macro]"));
     let name_card = pkg.object(ObjectKind::Form, "NameCard").unwrap();

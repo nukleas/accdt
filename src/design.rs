@@ -167,8 +167,22 @@ impl<'d> Control<'d> {
     pub fn is_layout_label_candidate(self) -> bool {
         self.kind() == ControlKind::Label && self.name().contains("_LayoutLabel")
     }
-    pub fn embedded_macros(self) -> BTreeMap<String, Macro> {
+    pub fn embedded_macros(self) -> crate::Result<BTreeMap<String, Macro>> {
         embedded_macros_of(self.node)
+    }
+    /// `ControlSource` as an expression: an `=` expression, or a field / bang path.
+    pub fn control_source_expr(self) -> crate::Result<Option<crate::expr::Expr>> {
+        match self.raw_property("ControlSource") {
+            None | Some("") => Ok(None),
+            Some(s) => crate::expr::parse_control_source(s).map(Some),
+        }
+    }
+    /// `DefaultValue` as an expression (optional leading `=`).
+    pub fn default_value_expr(self) -> crate::Result<Option<crate::expr::Expr>> {
+        match self.raw_property("DefaultValue") {
+            None | Some("") => Ok(None),
+            Some(s) => crate::expr::parse_default_value(s).map(Some),
+        }
     }
     fn effective(self, key: &str) -> Option<Resolved<&'d str>> {
         self.raw_property(key)
@@ -781,23 +795,23 @@ impl Design {
     }
 
     /// Embedded macros on the object and its controls, keyed `owner.Event`.
-    pub fn embedded_macros(&self) -> BTreeMap<String, Macro> {
+    pub fn embedded_macros(&self) -> crate::Result<BTreeMap<String, Macro>> {
         let mut out = BTreeMap::new();
         if let Some(root) = self.root() {
-            for (event, m) in embedded_macros_of(root) {
+            for (event, m) in embedded_macros_of(root)? {
                 out.insert(format!("{}.{event}", self.owner_name()), m);
             }
         }
         for c in self.items() {
-            for (event, m) in embedded_macros_of(c.raw_node()) {
+            for (event, m) in embedded_macros_of(c.raw_node())? {
                 out.insert(format!("{}.{event}", c.name()), m);
             }
         }
-        out
+        Ok(out)
     }
 }
 
-fn embedded_macros_of(node: &Node) -> BTreeMap<String, Macro> {
+fn embedded_macros_of(node: &Node) -> crate::Result<BTreeMap<String, Macro>> {
     node.children
         .iter()
         .filter_map(|c| {
@@ -805,7 +819,7 @@ fn embedded_macros_of(node: &Node) -> BTreeMap<String, Macro> {
                 .strip_suffix("EmMacro")
                 .map(|ev| (ev.trim_start_matches("On").to_string(), c))
         })
-        .map(|(event, c)| (event.clone(), Macro::from_node(&event, c)))
+        .map(|(event, c)| Ok((event.clone(), Macro::from_node(&event, c)?)))
         .collect()
 }
 
@@ -890,11 +904,11 @@ mod tests {
                 .iter()
                 .any(|e| e.event == "DblClick" && e.value == "[Embedded Macro]")
         );
-        let macros = d.embedded_macros();
-        assert_eq!(
-            macros["cmdSave.DblClick"].actions[0].arguments,
-            vec!["rptX"]
-        );
+        let macros = d.embedded_macros().unwrap();
+        assert!(matches!(
+            &macros["cmdSave.DblClick"].entry().steps[0],
+            crate::macros::Step::Always(crate::macros::Action::OpenReport { report, .. }) if report == "rptX"
+        ));
         assert!(d.code_behind().unwrap().contains("cmdSave_Click"));
     }
 }

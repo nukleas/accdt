@@ -583,14 +583,14 @@ impl Package {
 
     pub fn macros(&self) -> Result<Vec<Macro>> {
         self.objects_of(ObjectKind::Macro)
-            .map(|o| Ok(Macro::parse(&o.name, self.object_text(o)?)))
+            .map(|o| Macro::parse(&o.name, self.object_text(o)?))
             .collect()
     }
 
     /// A standalone macro by name.
     pub fn ui_macro(&self, name: &str) -> Result<Macro> {
         let o = self.object_required(ObjectKind::Macro, name)?;
-        Ok(Macro::parse(&o.name, self.object_text(o)?))
+        Macro::parse(&o.name, self.object_text(o)?)
     }
 
     pub fn queries(&self) -> Result<Vec<Query>> {

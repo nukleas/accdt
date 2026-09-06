@@ -1,6 +1,6 @@
 [package]
 name = "accdt"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 description = "Read Microsoft Access template packages (.accdt): tables with data, forms, reports, macros, queries, VBA modules, relationships and references, without Access"
 license = "MIT OR Apache-2.0"

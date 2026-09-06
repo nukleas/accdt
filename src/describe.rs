@@ -119,29 +119,22 @@ pub struct EventDescription {
     pub actions: Vec<String>,
 }
 
-/// One action as a line: `[condition] Action(arg, arg)`.
+/// One line per step: `[submacro:] action` or `If cond: action; action`.
 pub fn macro_lines(m: &Macro) -> Vec<String> {
-    m.actions
-        .iter()
-        .map(|a| {
-            let cond = a
-                .condition
-                .as_deref()
-                .map(|c| format!("[{c}] "))
-                .unwrap_or_default();
-            let args: Vec<&str> = a
-                .arguments
-                .iter()
-                .map(String::as_str)
-                .filter(|s| !s.is_empty())
-                .collect();
-            format!("{cond}{}({})", a.action, args.join(", "))
-        })
-        .collect()
+    let mut out = Vec::new();
+    for sm in &m.submacros {
+        let prefix = sm
+            .name
+            .as_ref()
+            .map(|n| format!("{n}: "))
+            .unwrap_or_default();
+        for step in &sm.steps {
+            out.push(format!("{prefix}{step}"));
+        }
+    }
+    out
 }
 
-/// Events with a handler, plus embedded macros whose event property the document does not
-/// list (the `Begin ... EmMacro` block is the only trace of some of them).
 fn events_for(
     owner: &str,
     design: &Design,
@@ -214,7 +207,13 @@ impl DesignDescription {
                 raw: rs.raw().to_string(),
             },
         };
-        let macros = design.embedded_macros();
+        let macros = match design.embedded_macros() {
+            Ok(m) => m,
+            Err(e) => {
+                diagnostics.push(format!("embedded macros: {e}"));
+                BTreeMap::new()
+            }
+        };
         let controls = design.controls();
         // Attached label captions, keyed by the control they belong to.
         let mut labels: BTreeMap<usize, String> = BTreeMap::new();

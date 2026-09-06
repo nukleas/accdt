@@ -173,7 +173,12 @@ fn reads_every_part() {
         Some("Option Explicit")
     );
     let m = pkg.ui_macro("AutoExec").unwrap();
-    assert_eq!(m.actions[0].arguments, vec!["Main Form"]);
+    match &m.entry().steps[..] {
+        [accdt::Step::Always(accdt::Action::OpenForm { form, .. })] => {
+            assert_eq!(form, "Main Form");
+        }
+        other => panic!("{other:?}"),
+    }
     let q = pkg.query("qryActive").unwrap();
     assert_eq!(q.definition.operation, Some(Operation::Select));
     let sql = q.to_sql();

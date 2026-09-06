@@ -22,14 +22,14 @@ for t in pkg.tables()? {
 }
 for f in pkg.forms()? {
     println!("{}: source {:?}", f.name, f.record_source());
-    for c in f.controls() {
+    for c in f.controls()? {
         println!("  {} {} in {}", c.control_type, c.name, c.section);
     }
-    for e in f.events() {
+    for e in f.events()? {
         println!("  {}.{} -> {}", e.owner, e.event, e.value);
     }
-    for (owner_event, m) in f.embedded_macros() {
-        println!("  macro {owner_event}: {} actions", m.actions.len());
+    for (owner_event, m) in f.embedded_macros()? {
+        println!("  macro {owner_event}: {} steps", m.entry().steps.len());
     }
 }
 for q in pkg.queries()? {
@@ -51,7 +51,7 @@ What is covered:
 | Tables: `objects/table*.xsd` + `sampleData/*.xml` | `tables()`, `table(name)`: columns with `od:jetType`/`od:sqlSType`, required, autoincrement, max length, field properties; indexes; table properties; rows as typed cells (`Cell::{Null, Value, Invalid}` with the XML lexical value kept; `Value::{Text, Boolean, Integer, Double, Currency, Decimal, DateTime, Binary, Guid, Complex}`, attachment children with their own schema); `validate_values()`; `to_csv()` |
 | `dataMacros/*.axl` | `data_macros(table)` |
 | Forms and reports (SaveAsText) | `forms()`, `reports()`, `form(name)`, `report(name)`: borrowed typed views (`sections()`, `controls()` with `ControlKind`, `is_visible()`/`is_enabled()`/`is_locked()`/`column_hidden()` decoding `NotDefault`, `default_view()`, `format()`, `decimal_places()`, `layout()`), `is_attached_label()`, `lookup()` (value lists vs SQL vs named row sources, bound and display columns), `subform_link()`, `record_source()` classified and resolved against the package, `group_levels()` from the report's `BreakLevel` blocks, events, embedded macros as parsed `Macro`s, code-behind VBA |
-| Macros (SaveAsText) | `macros()`, `ui_macro(name)`: actions with conditions and arguments |
+| Macros (SaveAsText) | `macros()`, `ui_macro(name)`: submacros, `Step::When` for `...` condition groups, typed `Action` (OpenForm, RunCommand/`AcCmd`, …) |
 | Queries (SaveAsText) | `queries()`, `query(name)`: tables and aliases, columns, joins, where/having/group/order, parameters, properties; `to_sql()` returns the stored SQL when Access kept it (union, pass-through, `TOP`), otherwise rebuilds select, append (`INSERT INTO … SELECT`), update, delete and make-table queries with alias-aware joins and a `PARAMETERS` clause, and says which it did; crosstab, DDL and pass-through queries without stored SQL come back as a commented skeleton |
 | Modules | `modules()`, `module(name)` |
 | Descriptions (what a port reads first) | `DesignDescription::new(design, package, all_controls)` and `TableDescription::new(table, package)`: owned, serialisable, with a text `Display`; `accdt describe` prints them |

@@ -73,14 +73,14 @@ fn project_details_description() {
         e.event == "Load"
             && e.actions
                 .iter()
-                .any(|a| a.starts_with("[Not IsNull([OpenArgs])] GoToRecord"))
+                .any(|a| a.starts_with("If Not IsNull([OpenArgs]): GoToRecord"))
     }));
     let print = d.sections[0]
         .controls
         .iter()
         .find(|c| c.name == "cmdPrint")
         .unwrap();
-    assert_eq!(print.events[0].actions, ["OpenReport(Project Tasks, 5, 0)"]);
+    assert_eq!(print.events[0].actions, ["OpenReport(Project Tasks, view=Report, window=Normal)"]);
     let footer = &d.sections[2];
     let sum = footer
         .controls

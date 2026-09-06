@@ -117,8 +117,8 @@ fn login_form_and_queries() {
     assert!(f.control_defaults().contains_key("TextBox"));
     // Wrapped strings are joined and unescaped.
     let learn = pkg.form("frmLearn").unwrap();
-    let caption = learn
-        .controls()
+    let learn_ctrls = learn.controls();
+    let caption = learn_ctrls
         .iter()
         .find_map(|c| {
             c.raw_property("Caption")
@@ -138,10 +138,13 @@ fn login_form_and_queries() {
         "{:?}",
         learn.document().warnings
     );
-    let macros = learn.embedded_macros();
+    let macros = learn.embedded_macros().unwrap();
     let open_report = &macros["cmdOpenReport.Click"];
-    assert_eq!(open_report.actions[0].action, "OpenReport");
-    assert_eq!(open_report.actions[0].arguments[0], "rptLearn");
+    let report = open_report.entry().steps.iter().find_map(|s| match s {
+        accdt::Step::Always(accdt::Action::OpenReport { report, .. }) => Some(report.as_str()),
+        _ => None,
+    });
+    assert_eq!(report, Some("rptLearn"));
     assert!(
         pkg.forms()
             .unwrap()
@@ -202,7 +205,14 @@ fn login_form_and_queries() {
     );
 
     let m = pkg.ui_macro("AutoExec").unwrap();
-    assert_eq!(m.actions[0].action, "OpenForm");
+    assert!(
+        m.entry()
+            .steps
+            .iter()
+            .any(|s| matches!(s, accdt::Step::When { body, .. } if matches!(body.first(), Some(accdt::Action::OpenForm { .. })))),
+        "{:?}",
+        m.entry().steps
+    );
     assert!(
         pkg.reports()
             .unwrap()

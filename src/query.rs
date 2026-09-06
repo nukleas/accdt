@@ -136,6 +136,11 @@ impl Query {
     pub fn to_sql(&self) -> Sql {
         self.definition.to_sql()
     }
+
+    /// Reconstruct the statement with each expression slot parsed and rendered as SQLite.
+    pub fn to_sqlite(&self) -> crate::Result<Sql> {
+        self.definition.to_sqlite()
+    }
 }
 
 impl QueryDef {
@@ -255,6 +260,51 @@ impl QueryDef {
         self.property("SQL")
             .map(str::trim)
             .filter(|s| !s.is_empty())
+    }
+
+    /// Parse each expression slot and render it with `r`. Statement shape is unchanged.
+    /// Stored SQL is returned as-is (`SqlSource::Stored`); it is not rewritten.
+    pub fn to_sql_translated(
+        &self,
+        r: &dyn Fn(&crate::expr::Expr) -> String,
+    ) -> crate::Result<Sql> {
+        Ok(self
+            .map_expr_slots(|s| Ok(r(&crate::expr::parse_expr(s)?)))?
+            .to_sql())
+    }
+
+    /// [`to_sql_translated`] with [`Expr::to_sqlite`](crate::expr::Expr::to_sqlite). Drops the
+    /// Access `PARAMETERS` clause, which SQLite does not accept.
+    pub fn to_sqlite(&self) -> crate::Result<Sql> {
+        let mut sql = self.to_sql_translated(&|e| e.to_sqlite())?;
+        sql.text = strip_parameters_clause(&sql.text);
+        Ok(sql)
+    }
+
+    fn map_expr_slots(
+        &self,
+        mut f: impl FnMut(&str) -> crate::Result<String>,
+    ) -> crate::Result<QueryDef> {
+        let mut q = self.clone();
+        for c in &mut q.columns {
+            c.expression = f(&c.expression)?;
+        }
+        for j in &mut q.joins {
+            j.expression = f(&j.expression)?;
+        }
+        if let Some(w) = q.where_clause.as_mut() {
+            *w = f(w)?;
+        }
+        if let Some(h) = q.having.as_mut() {
+            *h = f(h)?;
+        }
+        for g in &mut q.group_by {
+            *g = f(g)?;
+        }
+        for (e, _) in &mut q.order_by {
+            *e = f(e)?;
+        }
+        Ok(q)
     }
 
     pub fn to_sql(&self) -> Sql {
@@ -681,6 +731,17 @@ const RESERVED: &[&str] = &[
     "union",
 ];
 
+/// Access `PARAMETERS name Type;` is not SQLite; drop a leading clause of that form.
+fn strip_parameters_clause(sql: &str) -> String {
+    let Some(rest) = sql.strip_prefix("PARAMETERS ") else {
+        return sql.to_string();
+    };
+    match rest.split_once(";\n") {
+        Some((_, rest)) => rest.to_string(),
+        None => sql.to_string(),
+    }
+}
+
 fn bracket(name: &str) -> String {
     let plain = name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !name.chars().next().is_some_and(|c| c.is_ascii_digit());
@@ -733,6 +794,18 @@ mod tests {
         assert_eq!(
             sql.text,
             "INSERT INTO Tasks (Title, Project)\nSELECT [Common Tasks].Title, Forms![Project Details]!ID AS Expr1\nFROM [Common Tasks]\nWHERE ((([Common Tasks].Add)=True))\n;"
+        );
+        let sqlite = Query::parse("q", text.to_string()).to_sqlite().unwrap();
+        assert!(sqlite.is_executable(), "{}", sqlite.text);
+        assert!(
+            sqlite.text.contains(":forms_Project_Details_ID"),
+            "{}",
+            sqlite.text
+        );
+        assert!(
+            sqlite.text.contains(r#""Common Tasks"."Add" = 1"#),
+            "{}",
+            sqlite.text
         );
     }
 
