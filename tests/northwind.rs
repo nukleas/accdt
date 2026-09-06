@@ -90,10 +90,14 @@ fn login_form_and_queries() {
     let Some(pkg) = open() else { return };
     let f = pkg.form("frmLogin").unwrap();
     let ctrls = f.controls();
-    let login = ctrls.iter().find(|c| c.name == "cmdLogin").unwrap();
-    assert_eq!(login.control_type, "CommandButton");
-    assert!(login.layout().left.is_some(), "{:?}", login.layout());
-    let filled = f.layout(login);
+    let login = ctrls.iter().find(|c| c.name() == "cmdLogin").unwrap();
+    assert_eq!(login.kind(), accdt::ControlKind::CommandButton);
+    assert!(
+        login.layout().unwrap().left.is_some(),
+        "{:?}",
+        login.layout()
+    );
+    let filled = login.layout().unwrap();
     assert!(
         filled.left.is_some() && filled.width.is_some(),
         "{filled:?}"
@@ -111,7 +115,7 @@ fn login_form_and_queries() {
         .controls()
         .iter()
         .find_map(|c| {
-            c.get("Caption")
+            c.raw_property("Caption")
                 .filter(|v| v.starts_with("This form uses the new"))
                 .map(String::from)
         })
@@ -124,9 +128,9 @@ fn login_form_and_queries() {
     );
     assert!(caption.contains("\r\n"), "octal escapes decoded");
     assert!(
-        learn.document.warnings.is_empty(),
+        learn.document().warnings.is_empty(),
         "{:?}",
-        learn.document.warnings
+        learn.document().warnings
     );
     let macros = learn.embedded_macros();
     let open_report = &macros["cmdOpenReport.Click"];
@@ -137,7 +141,7 @@ fn login_form_and_queries() {
             .unwrap()
             .iter()
             .chain(pkg.reports().unwrap().iter())
-            .all(|d| d.document.warnings.is_empty())
+            .all(|d| d.document().warnings.is_empty())
     );
     // Bare event names.
     let list = pkg.form("frmEmployeeList").unwrap();

@@ -156,11 +156,8 @@ fn reads_every_part() {
     assert_eq!(f.record_source(), Some("Companies"));
     assert_eq!(f.get("Caption"), Some("Main \"window\" for everything"));
     assert_eq!(
-        f.controls()
-            .iter()
-            .map(|c| c.name.clone())
-            .collect::<Vec<_>>(),
-        vec!["Detail", "cmdGo"]
+        f.controls().iter().map(|c| c.name()).collect::<Vec<_>>(),
+        vec!["cmdGo"]
     );
     assert_eq!(
         f.events()[0].procedure_name().as_deref(),

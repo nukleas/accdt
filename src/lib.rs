@@ -13,7 +13,7 @@
 //!     println!("{} ({} rows)", table.name, table.rows.len());
 //! }
 //! for form in pkg.forms()? {
-//!     println!("{}: {} controls", form.name, form.controls().len());
+//!     println!("{}: {} controls", form.name(), form.controls().len());
 //! }
 //! # Ok::<(), accdt::Error>(())
 //! ```
@@ -48,3 +48,10 @@ pub use macros::{Macro, MacroAction};
 pub use package::{Module, ObjectEntry, ObjectKind, Package, PartFormat, Resource, Variation};
 pub use query::{Join, Operation, OutputColumn, Query, QueryDef, Sql, SqlSource};
 pub use table::{Column, Index, JetType, SharePointList, Table, Value};
+
+pub use design::{
+    BackStyle, ControlKind, DecimalPlaces, DefaultView, DesignItem, DisplayFormat, NamedFormat,
+    PropertyError, PropertyOrigin, PropertyResult, Resolved, Section, SectionKind, TextAlign,
+};
+
+pub use design::NodeId;

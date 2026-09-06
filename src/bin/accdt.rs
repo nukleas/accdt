@@ -89,7 +89,7 @@ impl Namer {
 }
 
 fn design_json(d: &accdt::Design) -> serde_json::Value {
-    serde_json::json!({"name": d.name, "properties": d.properties(), "controls": d.controls(), "events": d.events(), "embedded_macros": d.embedded_macros(), "code_behind": d.code_behind(), "warnings": d.document.warnings})
+    serde_json::json!({"name": d.name(), "properties": d.properties(), "controls": d.controls().iter().map(|c| c.raw_node()).collect::<Vec<_>>(), "events": d.events(), "embedded_macros": d.embedded_macros(), "code_behind": d.code_behind(), "warnings": d.document().warnings})
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -280,8 +280,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             for (sub, designs) in [("forms", pkg.forms()?), ("reports", pkg.reports()?)] {
                 for d in designs {
-                    let f = namer.file(sub, &d.name);
-                    std::fs::write(dir.join(sub).join(format!("{f}.txt")), &d.text)?;
+                    let f = namer.file(sub, d.name());
+                    std::fs::write(dir.join(sub).join(format!("{f}.txt")), d.text())?;
                     std::fs::write(
                         dir.join(sub).join(format!("{f}.json")),
                         serde_json::to_vec_pretty(&design_json(&d))?,

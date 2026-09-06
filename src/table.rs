@@ -79,6 +79,44 @@ impl Column {
             .find(|(n, _, _)| n == name)
             .map(|(_, _, v)| v.as_str())
     }
+    pub fn display_control(&self) -> crate::PropertyResult<crate::ControlKind> {
+        self.property("DisplayControl")
+            .map(|value| {
+                crate::design::integer(
+                    "",
+                    &self.name,
+                    "DisplayControl",
+                    crate::Resolved {
+                        value,
+                        origin: crate::PropertyOrigin::Explicit,
+                    },
+                    crate::ControlKind::from_code,
+                )
+            })
+            .transpose()
+    }
+    pub fn format(&self) -> Option<crate::DisplayFormat<'_>> {
+        self.property("Format").map(crate::DisplayFormat::parse)
+    }
+    pub fn input_mask(&self) -> Option<&str> {
+        self.property("InputMask")
+    }
+    pub fn decimal_places(&self) -> crate::PropertyResult<crate::DecimalPlaces> {
+        self.property("DecimalPlaces")
+            .map(|value| {
+                crate::design::integer(
+                    "",
+                    &self.name,
+                    "DecimalPlaces",
+                    crate::Resolved {
+                        value,
+                        origin: crate::PropertyOrigin::Explicit,
+                    },
+                    crate::DecimalPlaces::from_code,
+                )
+            })
+            .transpose()
+    }
     pub fn description(&self) -> Option<&str> {
         self.property("Description")
     }

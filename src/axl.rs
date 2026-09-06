@@ -480,21 +480,15 @@ mod tests {
 
     #[test]
     fn form_becomes_a_design() {
-        let doc = form_document("f", FORM).unwrap();
-        let d = Design {
-            name: "Contacts".into(),
-            kind: DesignKind::Form,
-            document: doc,
-            text: FORM.into(),
-        };
+        let d = Design::parse_axl("Contacts", DesignKind::Form, FORM.into()).unwrap();
         assert_eq!(d.record_source(), Some("Contacts"));
         assert_eq!(d.get("Caption"), Some("Contact List"));
         let ctrls = d.controls();
-        let names: Vec<&str> = ctrls.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, vec!["Detail", "txtContactName", "cmdSearch"]);
-        assert_eq!(ctrls[1].control_type, "TextBox");
-        assert_eq!(ctrls[1].section, "Detail");
-        assert_eq!(ctrls[1].get("ControlSource"), Some("ContactName"));
+        let names: Vec<&str> = ctrls.iter().map(|c| c.name()).collect();
+        assert_eq!(names, vec!["txtContactName", "cmdSearch"]);
+        assert_eq!(ctrls[0].kind(), crate::design::ControlKind::TextBox);
+        assert_eq!(ctrls[0].section().unwrap().name(), "Detail");
+        assert_eq!(ctrls[0].raw_property("ControlSource"), Some("ContactName"));
         let events = d.events();
         assert!(
             events.iter().any(|e| e.owner == "cmdSearch"

@@ -24,6 +24,8 @@ const SECTION_KINDS: &[&str] = &[
     "GroupFooter",
     "Section",
     "Detail",
+    "BreakHeader",
+    "BreakFooter",
 ];
 
 /// Event properties that do not start with `On`.
@@ -44,38 +46,491 @@ const BARE_EVENTS: &[&str] = &[
     "AfterNavigate",
 ];
 
-#[derive(Debug, Clone)]
+/// Stable ordinal in a design's mixed item walk. Compare only within that design.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
-pub struct Control {
-    pub name: String,
-    /// `TextBox`, `CommandButton`, `Subform`, `FormHeader`, `Section`, …
-    pub control_type: String,
-    /// Name of the section that contains it (sections name themselves).
-    pub section: String,
-    /// Containing control for nested controls (tab pages, option groups), or the section.
-    pub parent: Option<String>,
-    pub properties: BTreeMap<String, String>,
-    /// Embedded macros on this control, keyed by event name (`Click`, `AfterUpdate`, …).
-    pub embedded_macros: BTreeMap<String, Macro>,
+pub struct NodeId(usize);
+impl NodeId {
+    pub fn index(self) -> usize {
+        self.0
+    }
 }
 
-impl Control {
-    pub fn get(&self, key: &str) -> Option<&str> {
-        self.properties.get(key).map(String::as_str)
-    }
-    pub fn is_section(&self) -> bool {
-        SECTION_KINDS.contains(&self.control_type.as_str())
-    }
-    /// Layout in twips (1440 per inch) as written on the control. SaveAsText omits values
-    /// equal to the design's per-type defaults; use [`Design::layout`] to fill those in.
-    pub fn layout(&self) -> Layout {
-        let n = |k: &str| self.get(k).and_then(|v| v.parse().ok());
-        Layout {
-            left: n("Left"),
-            top: n("Top"),
-            width: n("Width"),
-            height: n("Height"),
+/// A borrowed control bound to its authoritative design node.
+#[derive(Debug, Clone, Copy)]
+pub struct Control<'d> {
+    design: &'d Design,
+    node: &'d Node,
+}
+#[derive(Debug, Clone, Copy)]
+pub struct Section<'d> {
+    design: &'d Design,
+    node: &'d Node,
+}
+#[derive(Debug, Clone, Copy)]
+pub enum DesignItem<'d> {
+    Control(Control<'d>),
+    Section(Section<'d>),
+}
+
+impl<'d> DesignItem<'d> {
+    pub fn id(self) -> NodeId {
+        match self {
+            Self::Control(c) => c.id(),
+            Self::Section(s) => s.id(),
         }
+    }
+    pub fn name(self) -> &'d str {
+        self.raw_node().get("Name").unwrap_or("")
+    }
+    pub fn raw_node(self) -> &'d Node {
+        match self {
+            Self::Control(c) => c.node,
+            Self::Section(s) => s.node,
+        }
+    }
+}
+impl<'d> Section<'d> {
+    pub fn id(self) -> NodeId {
+        NodeId(
+            self.design
+                .items()
+                .iter()
+                .position(|i| std::ptr::eq(i.raw_node(), self.node))
+                .expect("design-bound node"),
+        )
+    }
+    pub fn name(self) -> &'d str {
+        self.node.get("Name").unwrap_or("")
+    }
+    pub fn raw_node(self) -> &'d Node {
+        self.node
+    }
+    pub fn kind(self) -> SectionKind {
+        match self.node.kind.as_str() {
+            "Section" | "Detail" => SectionKind::Detail,
+            "FormHeader" if self.design.kind == DesignKind::Form => SectionKind::FormHeader,
+            "FormFooter" if self.design.kind == DesignKind::Form => SectionKind::FormFooter,
+            "FormHeader" | "ReportHeader" => SectionKind::ReportHeader,
+            "FormFooter" | "ReportFooter" => SectionKind::ReportFooter,
+            "PageHeader" => SectionKind::PageHeader,
+            "PageFooter" => SectionKind::PageFooter,
+            "BreakHeader" | "GroupHeader" => SectionKind::GroupHeader,
+            "BreakFooter" | "GroupFooter" => SectionKind::GroupFooter,
+            other => SectionKind::Unknown(other.into()),
+        }
+    }
+}
+impl<'d> Control<'d> {
+    pub fn id(self) -> NodeId {
+        NodeId(
+            self.design
+                .items()
+                .iter()
+                .position(|i| std::ptr::eq(i.raw_node(), self.node))
+                .expect("design-bound node"),
+        )
+    }
+    pub fn name(self) -> &'d str {
+        self.node.get("Name").unwrap_or("")
+    }
+    pub fn raw_node(self) -> &'d Node {
+        self.node
+    }
+    pub fn raw_property(self, name: &str) -> Option<&'d str> {
+        self.node.get(name)
+    }
+    pub fn kind(self) -> ControlKind {
+        ControlKind::from_name(&self.node.kind)
+    }
+    pub fn parent(self) -> Option<DesignItem<'d>> {
+        self.design.ancestry(self.node).last().copied()
+    }
+    pub fn section(self) -> Option<Section<'d>> {
+        self.design
+            .ancestry(self.node)
+            .into_iter()
+            .rev()
+            .find_map(|i| {
+                if let DesignItem::Section(s) = i {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+    }
+    /// Structural attachment only: labels on tab Pages can still be explanatory text.
+    pub fn is_attached_label(self) -> bool {
+        self.kind() == ControlKind::Label && matches!(self.parent(), Some(DesignItem::Control(_)))
+    }
+    /// Name convention, not proof that a label is disposable.
+    pub fn is_layout_label_candidate(self) -> bool {
+        self.kind() == ControlKind::Label && self.name().contains("_LayoutLabel")
+    }
+    pub fn embedded_macros(self) -> BTreeMap<String, Macro> {
+        embedded_macros_of(self.node)
+    }
+    fn effective(self, key: &str) -> Option<Resolved<&'d str>> {
+        self.raw_property(key)
+            .map(|value| Resolved {
+                value,
+                origin: PropertyOrigin::Explicit,
+            })
+            .or_else(|| {
+                self.design
+                    .control_defaults()
+                    .get(self.node.kind.as_str())
+                    .and_then(|p| p.get(key))
+                    .map(|value| Resolved {
+                        value: value.as_str(),
+                        origin: PropertyOrigin::ControlDefault,
+                    })
+            })
+    }
+    fn number<T>(self, key: &str, decode: impl FnOnce(i32) -> T) -> PropertyResult<T> {
+        self.effective(key)
+            .map(|r| integer(self.design.name(), self.name(), key, r, decode))
+            .transpose()
+    }
+    fn boolean(self, key: &str, baseline: bool) -> PropertyResult<bool> {
+        let known = !matches!(
+            self.kind(),
+            ControlKind::UnknownName(_) | ControlKind::UnknownCode(_)
+        );
+        let applicable = match key {
+            "Visible" => known,
+            "Enabled" => matches!(
+                self.kind(),
+                ControlKind::TextBox
+                    | ControlKind::ComboBox
+                    | ControlKind::ListBox
+                    | ControlKind::CheckBox
+                    | ControlKind::CommandButton
+                    | ControlKind::Subform
+                    | ControlKind::OptionGroup
+                    | ControlKind::OptionButton
+                    | ControlKind::ToggleButton
+                    | ControlKind::Attachment
+                    | ControlKind::Tab
+                    | ControlKind::Page
+            ),
+            "Locked" => matches!(
+                self.kind(),
+                ControlKind::TextBox
+                    | ControlKind::ComboBox
+                    | ControlKind::ListBox
+                    | ControlKind::CheckBox
+                    | ControlKind::Subform
+                    | ControlKind::OptionGroup
+                    | ControlKind::OptionButton
+                    | ControlKind::ToggleButton
+                    | ControlKind::Attachment
+            ),
+            "ColumnHidden" => matches!(
+                self.kind(),
+                ControlKind::TextBox
+                    | ControlKind::ComboBox
+                    | ControlKind::CheckBox
+                    | ControlKind::Attachment
+            ),
+            _ => false,
+        };
+        let baseline = (!self.design.is_axl() && applicable).then_some(baseline);
+        let raw = self.effective(key);
+        if raw
+            .as_ref()
+            .is_some_and(|r| r.value == "NotDefault" && r.origin == PropertyOrigin::Explicit)
+            && self
+                .design
+                .control_defaults()
+                .get(self.node.kind.as_str())
+                .is_some_and(|p| p.contains_key(key))
+        {
+            return Err(PropertyError::new(
+                self.design.name(),
+                self.name(),
+                key,
+                "NotDefault",
+                "custom default inversion requires paired export evidence",
+            ));
+        }
+        boolean(self.design.name(), self.name(), key, raw, baseline)
+    }
+    pub fn is_visible(self) -> PropertyResult<bool> {
+        self.boolean("Visible", true)
+    }
+    pub fn is_enabled(self) -> PropertyResult<bool> {
+        self.boolean("Enabled", true)
+    }
+    pub fn is_locked(self) -> PropertyResult<bool> {
+        self.boolean("Locked", false)
+    }
+    pub fn column_hidden(self) -> PropertyResult<bool> {
+        self.boolean("ColumnHidden", false)
+    }
+    pub fn text_align(self) -> PropertyResult<TextAlign> {
+        self.number("TextAlign", TextAlign::from_code)
+    }
+    pub fn back_style(self) -> PropertyResult<BackStyle> {
+        self.number("BackStyle", BackStyle::from_code)
+    }
+    pub fn decimal_places(self) -> PropertyResult<DecimalPlaces> {
+        self.number("DecimalPlaces", DecimalPlaces::from_code)
+    }
+    pub fn format(self) -> Option<DisplayFormat<'d>> {
+        self.effective("Format")
+            .map(|r| DisplayFormat::parse(r.value))
+    }
+    pub fn input_mask(self) -> Option<&'d str> {
+        self.effective("InputMask").map(|r| r.value)
+    }
+    pub fn layout(self) -> Result<Layout, PropertyError> {
+        let n = |key| {
+            self.effective(key)
+                .map(|r| {
+                    r.value.parse::<i64>().map_err(|_| {
+                        PropertyError::new(
+                            self.design.name(),
+                            self.name(),
+                            key,
+                            r.value,
+                            "expected integer layout value",
+                        )
+                    })
+                })
+                .transpose()
+        };
+        Ok(Layout {
+            left: n("Left")?,
+            top: n("Top")?,
+            width: n("Width")?,
+            height: n("Height")?,
+        })
+    }
+}
+
+pub type PropertyResult<T> = Result<Option<Resolved<T>>, PropertyError>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct Resolved<T> {
+    pub value: T,
+    pub origin: PropertyOrigin,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum PropertyOrigin {
+    Explicit,
+    ControlDefault,
+    FormatDefault,
+}
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{design}/{node}: {property}={raw:?}: {reason}")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct PropertyError {
+    pub design: String,
+    pub node: String,
+    pub property: String,
+    pub raw: String,
+    pub reason: String,
+}
+impl PropertyError {
+    pub(crate) fn new(design: &str, node: &str, property: &str, raw: &str, reason: &str) -> Self {
+        Self {
+            design: design.into(),
+            node: node.into(),
+            property: property.into(),
+            raw: raw.into(),
+            reason: reason.into(),
+        }
+    }
+}
+pub(crate) fn integer<T>(
+    design: &str,
+    node: &str,
+    key: &str,
+    r: Resolved<&str>,
+    decode: impl FnOnce(i32) -> T,
+) -> Result<Resolved<T>, PropertyError> {
+    let value = r
+        .value
+        .parse()
+        .map_err(|_| PropertyError::new(design, node, key, r.value, "expected integer"))?;
+    Ok(Resolved {
+        value: decode(value),
+        origin: r.origin,
+    })
+}
+fn boolean(
+    design: &str,
+    node: &str,
+    key: &str,
+    raw: Option<Resolved<&str>>,
+    baseline: Option<bool>,
+) -> PropertyResult<bool> {
+    let Some(raw) = raw else {
+        return Ok(baseline.map(|value| Resolved {
+            value,
+            origin: PropertyOrigin::FormatDefault,
+        }));
+    };
+    let value = match raw.value {
+        "0" | "false" | "False" => false,
+        "-1" | "1" | "true" | "True" => true,
+        "NotDefault" => !baseline.ok_or_else(|| {
+            PropertyError::new(
+                design,
+                node,
+                key,
+                raw.value,
+                "unverified serialization baseline",
+            )
+        })?,
+        _ => {
+            return Err(PropertyError::new(
+                design,
+                node,
+                key,
+                raw.value,
+                "expected boolean",
+            ));
+        }
+    };
+    Ok(Some(Resolved {
+        value,
+        origin: raw.origin,
+    }))
+}
+macro_rules! coded_enum {
+    ($name:ident { $($variant:ident = $code:literal),* $(,)? }) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+        pub enum $name { $($variant,)* Unknown(i32) }
+        impl $name { pub fn from_code(code: i32) -> Self { match code { $($code => Self::$variant,)* n => Self::Unknown(n) } } }
+    };
+}
+coded_enum!(DefaultView { Single=0, Continuous=1, Datasheet=2, PivotTable=3, PivotChart=4, Split=5 });
+coded_enum!(TextAlign { General=0, Left=1, Center=2, Right=3, Distribute=4 });
+coded_enum!(BackStyle { Transparent=0, Normal=1 });
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum DecimalPlaces {
+    Auto,
+    Fixed(u8),
+    Unknown(i32),
+}
+impl DecimalPlaces {
+    pub fn from_code(n: i32) -> Self {
+        match n {
+            255 => Self::Auto,
+            0..=15 => Self::Fixed(n as u8),
+            _ => Self::Unknown(n),
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum SectionKind {
+    Detail,
+    FormHeader,
+    FormFooter,
+    ReportHeader,
+    ReportFooter,
+    PageHeader,
+    PageFooter,
+    GroupHeader,
+    GroupFooter,
+    Unknown(String),
+}
+macro_rules! control_kinds {
+    ($($variant:ident = $code:literal),* $(,)?) => {
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+        pub enum ControlKind { $($variant,)* UnknownName(String), UnknownCode(i32) }
+        impl ControlKind {
+            pub fn from_code(n: i32) -> Self { match n { $($code => Self::$variant,)* n => Self::UnknownCode(n) } }
+            pub fn from_name(s: &str) -> Self { $(if s.eq_ignore_ascii_case(stringify!($variant)) { return Self::$variant; })* Self::UnknownName(s.into()) }
+        }
+    };
+}
+control_kinds!(
+    Label = 100,
+    Rectangle = 101,
+    Line = 102,
+    Image = 103,
+    CommandButton = 104,
+    OptionButton = 105,
+    CheckBox = 106,
+    OptionGroup = 107,
+    BoundObjectFrame = 108,
+    TextBox = 109,
+    ListBox = 110,
+    ComboBox = 111,
+    Subform = 112,
+    ObjectFrame = 114,
+    PageBreak = 118,
+    CustomControl = 119,
+    ToggleButton = 122,
+    Tab = 123,
+    Page = 124,
+    Attachment = 126,
+    EmptyCell = 127,
+    WebBrowser = 128,
+    NavigationControl = 129,
+    NavigationButton = 130,
+    Chart = 133,
+    EdgeBrowser = 134
+);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum NamedFormat {
+    GeneralDate,
+    LongDate,
+    MediumDate,
+    ShortDate,
+    LongTime,
+    MediumTime,
+    ShortTime,
+    GeneralNumber,
+    Currency,
+    Euro,
+    Fixed,
+    Standard,
+    Percent,
+    Scientific,
+    YesNo,
+    TrueFalse,
+    OnOff,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum DisplayFormat<'a> {
+    Named(NamedFormat),
+    Custom(&'a str),
+}
+impl<'a> DisplayFormat<'a> {
+    pub fn parse(s: &'a str) -> Self {
+        use NamedFormat::*;
+        let named = match s.to_ascii_lowercase().as_str() {
+            "general date" => GeneralDate,
+            "long date" => LongDate,
+            "medium date" => MediumDate,
+            "short date" => ShortDate,
+            "long time" => LongTime,
+            "medium time" => MediumTime,
+            "short time" => ShortTime,
+            "general number" => GeneralNumber,
+            "currency" => Currency,
+            "euro" => Euro,
+            "fixed" => Fixed,
+            "standard" => Standard,
+            "percent" => Percent,
+            "scientific" => Scientific,
+            "yes/no" => YesNo,
+            "true/false" => TrueFalse,
+            "on/off" => OnOff,
+            _ => return Self::Custom(s),
+        };
+        Self::Named(named)
     }
 }
 
@@ -113,12 +568,12 @@ impl Event {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Design {
-    pub name: String,
-    pub kind: DesignKind,
+    name: String,
+    kind: DesignKind,
     /// The parsed document; every other accessor is a view over it.
-    pub document: Document,
+    document: Document,
     /// The original SaveAsText text.
-    pub text: String,
+    text: String,
 }
 
 static EMPTY: std::sync::LazyLock<BTreeMap<String, String>> =
@@ -204,26 +659,107 @@ impl Design {
         out
     }
 
-    /// A control's layout with missing values filled from the design's defaults for its type.
-    pub fn layout(&self, control: &Control) -> Layout {
-        let mut l = control.layout();
-        if let Some(d) = self.control_defaults().get(control.control_type.as_str()) {
-            let n = |k: &str| d.get(k).and_then(|v| v.parse().ok());
-            l.left = l.left.or_else(|| n("Left"));
-            l.top = l.top.or_else(|| n("Top"));
-            l.width = l.width.or_else(|| n("Width"));
-            l.height = l.height.or_else(|| n("Height"));
-        }
-        l
+    pub fn name(&self) -> &str {
+        &self.name
     }
-
-    /// Sections and controls in design order, sections first within their subtree.
-    pub fn controls(&self) -> Vec<Control> {
+    pub fn kind(&self) -> DesignKind {
+        self.kind
+    }
+    pub fn document(&self) -> &Document {
+        &self.document
+    }
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+    pub fn default_view(&self) -> PropertyResult<DefaultView> {
+        self.get("DefaultView")
+            .map(|value| {
+                integer(
+                    self.name(),
+                    self.owner_name(),
+                    "DefaultView",
+                    Resolved {
+                        value,
+                        origin: PropertyOrigin::Explicit,
+                    },
+                    DefaultView::from_code,
+                )
+            })
+            .transpose()
+    }
+    /// Sections and controls in document order; defaults and macros are excluded.
+    pub fn items(&self) -> Vec<DesignItem<'_>> {
         let mut out = Vec::new();
-        for child in self.root().into_iter().flat_map(|r| r.children.iter()) {
-            walk(child, "", None, &mut out);
+        for child in self.root().into_iter().flat_map(|r| &r.children) {
+            walk(self, child, &mut out);
         }
         out
+    }
+    pub fn controls(&self) -> Vec<Control<'_>> {
+        self.items()
+            .into_iter()
+            .filter_map(|i| {
+                if let DesignItem::Control(c) = i {
+                    Some(c)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+    pub fn sections(&self) -> Vec<Section<'_>> {
+        self.items()
+            .into_iter()
+            .filter_map(|i| {
+                if let DesignItem::Section(s) = i {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+    fn ancestry(&self, target: &Node) -> Vec<DesignItem<'_>> {
+        fn visit<'d>(
+            design: &'d Design,
+            node: &'d Node,
+            target: &Node,
+            path: &mut Vec<DesignItem<'d>>,
+        ) -> bool {
+            if std::ptr::eq(node, target) {
+                return true;
+            }
+            let item = design.item(node);
+            if let Some(i) = item {
+                path.push(i);
+            }
+            for child in &node.children {
+                if visit(design, child, target, path) {
+                    return true;
+                }
+            }
+            if item.is_some() {
+                path.pop();
+            }
+            false
+        }
+        let mut path = Vec::new();
+        if let Some(root) = self.root() {
+            for child in &root.children {
+                if visit(self, child, target, &mut path) {
+                    break;
+                }
+            }
+        }
+        path
+    }
+    fn item<'d>(&'d self, node: &'d Node) -> Option<DesignItem<'d>> {
+        node.get("Name")?;
+        Some(if SECTION_KINDS.contains(&node.kind.as_str()) {
+            DesignItem::Section(Section { design: self, node })
+        } else {
+            DesignItem::Control(Control { design: self, node })
+        })
     }
 
     fn owner_name(&self) -> &'static str {
@@ -238,8 +774,8 @@ impl Design {
     pub fn events(&self) -> Vec<Event> {
         let mut out = Vec::new();
         collect_events(self.owner_name(), self.properties(), &mut out);
-        for c in self.controls() {
-            collect_events(&c.name, &c.properties, &mut out);
+        for c in self.items() {
+            collect_events(c.name(), &c.raw_node().properties, &mut out);
         }
         out
     }
@@ -252,9 +788,9 @@ impl Design {
                 out.insert(format!("{}.{event}", self.owner_name()), m);
             }
         }
-        for c in self.controls() {
-            for (event, m) in c.embedded_macros {
-                out.insert(format!("{}.{event}", c.name), m);
+        for c in self.items() {
+            for (event, m) in embedded_macros_of(c.raw_node()) {
+                out.insert(format!("{}.{event}", c.name()), m);
             }
         }
         out
@@ -291,39 +827,18 @@ fn collect_events(owner: &str, props: &BTreeMap<String, String>, out: &mut Vec<E
     }
 }
 
-fn walk(node: &Node, section: &str, parent: Option<&str>, out: &mut Vec<Control>) {
-    if node.kind == "Block" {
-        for child in &node.children {
-            walk(child, section, parent, out);
-        }
-        return;
-    }
+fn walk<'d>(design: &'d Design, node: &'d Node, out: &mut Vec<DesignItem<'d>>) {
     if node.kind.ends_with("EmMacro") {
         return;
     }
-    let Some(name) = node.get("Name").map(String::from) else {
-        return;
-    };
-    let is_section = SECTION_KINDS.contains(&node.kind.as_str());
-    let section_name = if is_section {
-        name.clone()
-    } else {
-        section.to_string()
-    };
-    out.push(Control {
-        name: name.clone(),
-        control_type: node.kind.clone(),
-        section: section_name.clone(),
-        parent: if is_section {
-            None
-        } else {
-            parent.map(String::from)
-        },
-        properties: node.properties.clone(),
-        embedded_macros: embedded_macros_of(node),
-    });
+    if node.kind != "Block" {
+        let Some(item) = design.item(node) else {
+            return;
+        };
+        out.push(item);
+    }
     for child in &node.children {
-        walk(child, &section_name, Some(&name), out);
+        walk(design, child, out);
     }
 }
 
@@ -340,23 +855,13 @@ mod tests {
         assert_eq!(d.control_defaults()["Label"]["FontSize"], "11");
         assert_eq!(d.header()["Version"], "21");
         let ctrls = d.controls();
-        let names: Vec<&str> = ctrls.iter().map(|c| c.name.as_str()).collect();
+        let names: Vec<&str> = ctrls.iter().map(|c| c.name()).collect();
+        assert_eq!(names, vec!["lblTitle", "tabMain", "pgOne", "cmdSave"]);
+        let save = ctrls.iter().find(|c| c.name() == "cmdSave").unwrap();
+        assert_eq!(save.section().unwrap().name(), "Detail");
+        assert_eq!(save.parent().map(DesignItem::name), Some("pgOne"));
         assert_eq!(
-            names,
-            vec![
-                "FormHeader",
-                "lblTitle",
-                "Detail",
-                "tabMain",
-                "pgOne",
-                "cmdSave"
-            ]
-        );
-        let save = ctrls.iter().find(|c| c.name == "cmdSave").unwrap();
-        assert_eq!(save.section, "Detail");
-        assert_eq!(save.parent.as_deref(), Some("pgOne"));
-        assert_eq!(
-            save.layout(),
+            save.layout().unwrap(),
             Layout {
                 left: Some(100),
                 top: Some(200),

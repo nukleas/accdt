@@ -71,13 +71,13 @@ fn contacts_web_database_reads_axl_objects() {
     assert_eq!(list.record_source(), Some("Contacts"));
     let ctrls = list.controls();
     assert!(
-        ctrls.iter().any(|c| c.name == "txtContactName"
-            && c.control_type == "TextBox"
-            && c.get("ControlSource") == Some("ContactName")),
+        ctrls.iter().any(|c| c.name() == "txtContactName"
+            && c.kind() == accdt::ControlKind::TextBox
+            && c.raw_property("ControlSource") == Some("ContactName")),
         "{:?}",
-        ctrls.iter().map(|c| &c.name).collect::<Vec<_>>()
+        ctrls.iter().map(|c| c.name()).collect::<Vec<_>>()
     );
-    assert!(ctrls.iter().any(|c| c.name == "Detail" && c.is_section()));
+    assert!(list.sections().iter().any(|s| s.name() == "Detail"));
     let macros = list.embedded_macros();
     assert!(!macros.is_empty(), "UI macros become embedded macros");
     assert!(list.events().iter().any(|e| e.value == "[Embedded Macro]"));
@@ -99,7 +99,7 @@ fn contacts_web_database_reads_axl_objects() {
         report
             .controls()
             .iter()
-            .any(|c| c.control_type == "Textbox" || c.is_section())
+            .any(|c| c.kind() == accdt::ControlKind::TextBox)
     );
     let q = pkg.query("ContactsExtended").unwrap();
     let sql = q.to_sql();
