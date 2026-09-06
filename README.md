@@ -48,17 +48,18 @@ What is covered:
 |---|---|
 | `template/template.xml`, `docProps/core.xml` | `template()`, `core_properties()` |
 | `databaseProperties.xml` | `database_properties()` (AccessVersion, StartUpForm, AppTitle, …) |
-| Tables: `objects/table*.xsd` + `sampleData/*.xml` | `tables()`, `table(name)`: columns with `od:jetType`/`od:sqlSType`, required, autoincrement, max length, field properties; indexes; table properties; rows (attachments and multi-valued cells as structured `Value::Complex` records); `to_csv()` |
+| Tables: `objects/table*.xsd` + `sampleData/*.xml` | `tables()`, `table(name)`: columns with `od:jetType`/`od:sqlSType`, required, autoincrement, max length, field properties; indexes; table properties; rows as typed cells (`Cell::{Null, Value, Invalid}` with the XML lexical value kept; `Value::{Text, Boolean, Integer, Double, Currency, Decimal, DateTime, Binary, Guid, Complex}`, attachment children with their own schema); `validate_values()`; `to_csv()` |
 | `dataMacros/*.axl` | `data_macros(table)` |
-| Forms and reports (SaveAsText) | `forms()`, `reports()`, `form(name)`, `report(name)`: properties, control tree with layout, sections, events (`On*` and `AfterUpdate`-style), embedded macros as parsed `Macro`s, code-behind VBA, per-type control defaults |
+| Forms and reports (SaveAsText) | `forms()`, `reports()`, `form(name)`, `report(name)`: borrowed typed views (`sections()`, `controls()` with `ControlKind`, `is_visible()`/`is_enabled()`/`is_locked()`/`column_hidden()` decoding `NotDefault`, `default_view()`, `format()`, `decimal_places()`, `layout()`), `is_attached_label()`, `lookup()` (value lists vs SQL vs named row sources, bound and display columns), `subform_link()`, `record_source()` classified and resolved against the package, `group_levels()` from the report's `BreakLevel` blocks, events, embedded macros as parsed `Macro`s, code-behind VBA |
 | Macros (SaveAsText) | `macros()`, `ui_macro(name)`: actions with conditions and arguments |
 | Queries (SaveAsText) | `queries()`, `query(name)`: tables and aliases, columns, joins, where/having/group/order, parameters, properties; `to_sql()` returns the stored SQL when Access kept it (union, pass-through, `TOP`), otherwise rebuilds select, append (`INSERT INTO … SELECT`), update, delete and make-table queries with alias-aware joins and a `PARAMETERS` clause, and says which it did; crosstab, DDL and pass-through queries without stored SQL come back as a commented skeleton |
 | Modules | `modules()`, `module(name)` |
+| Descriptions (what a port reads first) | `DesignDescription::new(design, package, all_controls)` and `TableDescription::new(table, package)`: owned, serialisable, with a text `Display`; `accdt describe` prints them |
 | `relationships.xml` | `relationships()` with integrity and cascade flags |
 | `vbaReferences.xml` | `vba_references()` with names for well-known type libraries and a 32-bit-only flag |
 | `resources/` | `resources()` |
 | Web databases (Access 2010 Access Services): forms/reports/queries as AXL XML | Same `forms()`/`reports()`/`queries()` API; `Design::is_axl()`, `ObjectEntry::format`. AXL UI macros appear as embedded macros; report items and query definitions map onto the same types |
-| SharePoint list links (`WSS*` table properties, metadata `WSSTemplateID`) | `Table::sharepoint` (`SharePointList`: template id, root folder, view URL, version), `Table::is_linked()` |
+| SharePoint list links (`WSS*` table properties, metadata `WSSTemplateID`) | `Table::sharepoint_metadata` (`SharePointMetadata`: template id, root folder, view URL, version), `Table::is_linked()` |
 | List definitions (`.caml` parts, `ListInstanceDefinition` relationships) | `list_definitions()`: list name, template id, fields with types |
 | Localisation variations (`template/variation` relationships: `FlipName`, `AddFurigana`, …) | grouped under the base object as `ObjectEntry::variations`; `form_variation()`, `report_variation()`, `query_variation()`, `table_variation()` |
 | Linked tables (`Link` / `SQLLink` object types) | indexed as `ObjectKind::Link` with the raw part; no Microsoft template ships one |
@@ -83,6 +84,8 @@ accdt info northwind.accdt
 accdt ls northwind.accdt
 accdt cat northwind.accdt table Companies      # CSV
 accdt cat northwind.accdt query qryOrders     # SQL
+accdt describe projects.accdt form "Project Details"   # sources, sections, controls, lookups, links, events, groups
+accdt describe projects.accdt table Tasks --json
 accdt json northwind.accdt form frmLogin      # controls, events, macros, code
 accdt export northwind.accdt out/
 ```

@@ -20,14 +20,14 @@ fn wss_tasks_template_links_sharepoint_lists() {
     assert_eq!(pkg.objects_of(ObjectKind::Table).count(), 2);
     let tasks = pkg.table("Tasks").unwrap();
     let sp = tasks
-        .sharepoint
+        .sharepoint_metadata
         .as_ref()
         .expect("Tasks is a SharePoint list link");
     assert_eq!(sp.template_id, Some(107));
     assert!(sp.display_views_on_site);
     assert!(tasks.is_linked() && !tasks.has_data_part);
     let users = pkg.table("User Information List").unwrap();
-    let sp = users.sharepoint.as_ref().unwrap();
+    let sp = users.sharepoint_metadata.as_ref().unwrap();
     assert_eq!(sp.template_id, Some(112));
     assert_eq!(sp.root_folder.as_deref(), Some("_catalogs/users"));
     assert!(
@@ -61,7 +61,10 @@ fn contacts_web_database_reads_axl_objects() {
     assert_eq!(contacts.variations.len(), 3);
     assert!(contacts.variations.iter().any(|v| v.id == "FlipName"));
     let t = pkg.table("Contacts").unwrap();
-    assert_eq!(t.sharepoint.as_ref().and_then(|s| s.template_id), Some(105));
+    assert_eq!(
+        t.sharepoint_metadata.as_ref().and_then(|s| s.template_id),
+        Some(105)
+    );
     let flipped = pkg.table_variation("Contacts", "FlipName").unwrap();
     assert!(!flipped.columns.is_empty());
 

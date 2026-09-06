@@ -426,8 +426,8 @@ impl Package {
             table::parse_data(dp, &mut t, self.part_required(dp)?)?;
         }
         // Web-database tables carry the SharePoint template id in their metadata part only.
-        if let (None, Some(id)) = (&t.sharepoint, o.wss_template_id) {
-            t.sharepoint = Some(table::SharePointList {
+        if let (None, Some(id)) = (&t.sharepoint_metadata, o.wss_template_id) {
+            t.sharepoint_metadata = Some(table::SharePointMetadata {
                 template_id: Some(id),
                 ..Default::default()
             });

@@ -37,6 +37,18 @@ enum Cmd {
     },
     /// Write every object to a directory (csv, sql, txt, bas, json)
     Export { package: PathBuf, dir: PathBuf },
+    /// Summarise a form, report or table the way a port reads it: sources, sections,
+    /// controls with lookups and links, events, group levels
+    Describe {
+        package: PathBuf,
+        kind: String,
+        name: String,
+        /// Include attached labels and layout placeholders
+        #[arg(long)]
+        all_controls: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -156,12 +168,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             for t in pkg.tables()? {
-                if let Some(sp) = &t.sharepoint {
-                    println!(
-                        "sharepoint list: {} (template {})",
-                        t.name,
-                        sp.template_id.map(|i| i.to_string()).unwrap_or_default()
-                    );
+                if let Some(sp) = &t.sharepoint_metadata {
+                    let template = sp
+                        .template_id
+                        .map(|i| i.to_string())
+                        .unwrap_or_else(|| "unknown".into());
+                    if t.is_linked() {
+                        println!(
+                            "linked SharePoint list: {} (template {template}; rows not included)",
+                            t.name
+                        );
+                    } else {
+                        println!(
+                            "local table: {} (publishable as list template {template}; {} sample rows)",
+                            t.name,
+                            t.rows.len()
+                        );
+                    }
                 }
             }
             for l in pkg.list_definitions()? {
@@ -252,6 +275,45 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             };
             println!("{json}");
+        }
+        Cmd::Describe {
+            package,
+            kind: k,
+            name,
+            all_controls,
+            json,
+        } => {
+            let pkg = Package::open(&package)?;
+            match kind(&k)? {
+                ObjectKind::Form | ObjectKind::Report => {
+                    let d = if kind(&k)? == ObjectKind::Form {
+                        pkg.form(&name)?
+                    } else {
+                        pkg.report(&name)?
+                    };
+                    let desc = accdt::DesignDescription::new(&d, Some(&pkg), all_controls);
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&desc)?);
+                    } else {
+                        print!("{desc}");
+                    }
+                }
+                ObjectKind::Table => {
+                    let desc = accdt::TableDescription::new(&pkg.table(&name)?, Some(&pkg));
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&desc)?);
+                    } else {
+                        print!("{desc}");
+                    }
+                }
+                other => {
+                    return Err(format!(
+                        "describe covers forms, reports and tables, not {}",
+                        other.as_str()
+                    )
+                    .into());
+                }
+            }
         }
         Cmd::Export { package, dir } => {
             let pkg = Package::open(&package)?;

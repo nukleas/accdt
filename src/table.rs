@@ -690,7 +690,7 @@ fn validate_xsd(kind: &str, s: &str) -> Result<(), String> {
 /// A table that is a link to a SharePoint list rather than local data.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
-pub struct SharePointList {
+pub struct SharePointMetadata {
     /// List template id (100 generic, 105 contacts, 106 events, 107 tasks, 1100 issues, …).
     pub template_id: Option<u32>,
     pub root_folder: Option<String>,
@@ -710,7 +710,7 @@ pub struct Table {
     /// `od:tableProperty` entries: `(name, type code, value)`.
     pub properties: Vec<(String, String, String)>,
     /// Present when the table is a SharePoint list link (`WSS*` table properties).
-    pub sharepoint: Option<SharePointList>,
+    pub sharepoint_metadata: Option<SharePointMetadata>,
     /// Rows in column order, preserving absent, nil, invalid and typed values.
     pub rows: Vec<Row>,
     /// Whether a sample-data part existed (a table can legitimately have zero rows).
@@ -734,7 +734,7 @@ impl Table {
     /// of that template id when the database is created on a site (the 2007 desktop
     /// templates ship this way); it is not linked.
     pub fn is_linked(&self) -> bool {
-        self.sharepoint.is_some() && !self.has_data_part
+        self.sharepoint_metadata.is_some() && !self.has_data_part
     }
 
     /// Column by name, case-insensitively (Access names are case-insensitive).
@@ -786,7 +786,7 @@ pub(crate) fn parse_schema(part: &str, name: &str, bytes: &[u8]) -> crate::Resul
         columns: Vec::new(),
         indexes: Vec::new(),
         properties: Vec::new(),
-        sharepoint: None,
+        sharepoint_metadata: None,
         rows: Vec::new(),
         has_data_part: false,
     };
@@ -818,7 +818,7 @@ pub(crate) fn parse_schema(part: &str, name: &str, bytes: &[u8]) -> crate::Resul
         .iter()
         .any(|(n, _, _)| n.starts_with("WSS"))
     {
-        table.sharepoint = Some(SharePointList {
+        table.sharepoint_metadata = Some(SharePointMetadata {
             template_id: table.property("WSSTemplateID").and_then(|v| v.parse().ok()),
             root_folder: table.property("WSSRootFolder").map(String::from),
             default_view_url: table.property("DefaultViewUrl").map(String::from),

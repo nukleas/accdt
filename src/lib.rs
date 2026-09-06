@@ -47,7 +47,7 @@ pub use error::{Error, Result};
 pub use macros::{Macro, MacroAction};
 pub use package::{Module, ObjectEntry, ObjectKind, Package, PartFormat, Resource, Variation};
 pub use query::{Join, Operation, OutputColumn, Query, QueryDef, Sql, SqlSource};
-pub use table::{Column, Index, JetType, SharePointList, Table, Value};
+pub use table::{Column, Index, JetType, SharePointMetadata, Table, Value};
 
 pub use design::{
     BackStyle, ControlKind, DecimalPlaces, DefaultView, DesignItem, DisplayFormat, NamedFormat,
@@ -65,4 +65,11 @@ pub use package::{ResolvedObject, ResolvedRecordSource};
 pub use table::{
     Cell, ComplexRecord, Currency, Decimal, ExpandedName, NullEncoding, Restriction, Row,
     ValueError, XmlDateTime,
+};
+
+pub mod describe;
+pub use describe::{
+    ColumnDescription, ControlDescription, DesignDescription, EventDescription, GroupDescription,
+    LookupDescription, SectionDescription, SharePointDescription, SourceDescription,
+    SubformDescription, TableDescription,
 };
