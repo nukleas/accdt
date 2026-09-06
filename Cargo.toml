@@ -10,6 +10,7 @@ categories = ["parser-implementations", "database"]
 readme = "README.md"
 
 [dependencies]
+base64 = "0.22"
 roxmltree = "0.21"
 thiserror = "2"
 zip = { version = "8", default-features = false, features = ["deflate"] }

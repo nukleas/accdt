@@ -59,7 +59,7 @@ fn companies_table() {
     assert_eq!(t.primary_key().unwrap().columns, vec!["CompanyID"]);
     assert_eq!(t.rows.len(), 13);
     assert_eq!(
-        t.rows[0][1].as_ref().and_then(Value::as_str),
+        t.rows[0].cells[1].value().and_then(Value::as_str),
         Some("Adatum Corporation")
     );
     let dm = pkg.data_macros("Companies").unwrap();
@@ -74,12 +74,18 @@ fn companies_table() {
     let photos = e
         .rows
         .iter()
-        .filter(|r| matches!(r[col], Some(Value::Complex(_))))
+        .filter(|r| matches!(r.cells[col].value(), Some(Value::Complex(_))))
         .count();
     assert!(photos >= 9, "{photos} employees with attachments");
-    if let Some(Value::Complex(recs)) = &e.rows[0][col] {
+    if let Some(Value::Complex(recs)) = e.rows[0].cells[col].value() {
         assert!(
-            recs[0].get("FileName").is_some_and(|n| n.ends_with(".jpg")),
+            recs[0]
+                .fields
+                .iter()
+                .find(|(n, _)| n == "FileName")
+                .and_then(|(_, c)| c.value())
+                .and_then(Value::as_str)
+                .is_some_and(|n| n.ends_with(".jpg")),
             "{recs:?}"
         );
     }

@@ -61,3 +61,8 @@ pub use design::{
     Lookup, RecordSource, RowSource, SortDirection, SubformLink, ValueList,
 };
 pub use package::{ResolvedObject, ResolvedRecordSource};
+
+pub use table::{
+    Cell, ComplexRecord, Currency, Decimal, ExpandedName, NullEncoding, Restriction, Row,
+    ValueError, XmlDateTime,
+};

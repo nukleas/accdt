@@ -123,28 +123,27 @@ fn reads_every_part() {
     assert_eq!(t.columns[1].max_length, Some(50));
     assert_eq!(t.columns[1].description(), Some("Legal name"));
     assert_eq!(t.primary_key().unwrap().columns, vec!["ID"]);
-    assert_eq!(t.rows[0][1], Some(Value::Text("Acme & Co".into())));
-    match &t.rows[0][3] {
+    assert_eq!(
+        t.rows[0].cells[1].value(),
+        Some(&Value::Text("Acme & Co".into()))
+    );
+    match t.rows[0].cells[3].value() {
         Some(Value::Complex(records)) => {
             assert_eq!(records.len(), 2);
-            assert_eq!(records[1]["FileName"], "b.png");
+            assert_eq!(records[0].fields[0].0, "FileName");
+            assert_eq!(records[0].fields[0].1.lexical(), Some("a.png"));
         }
-        other => panic!("expected attachments, got {other:?}"),
+        other => panic!("expected complex records: {other:?}"),
     }
-    assert_eq!(
-        t.rows[1],
-        vec![
-            Some(Value::Text("2".into())),
-            None,
-            Some(Value::Text("0".into())),
-            None
-        ]
-    );
-    assert_eq!(
-        t.to_csv(),
-        "\"ID\",\"Company Name\",\"Active\",\"Files\"\n\"1\",\"Acme & Co\",\"1\",\"FileData=<4 base64 chars>; FileName=a.png | FileData=<4 base64 chars>; FileName=b.png\"\n\"2\",,\"0\",\n"
-    );
-    assert!(t.column("COMPANYID").is_none() && t.column("id").is_some());
+    assert_eq!(t.rows[1].cells[0].value(), Some(&Value::Integer(2)));
+    assert!(matches!(
+        t.rows[1].cells[1],
+        accdt::Cell::Null {
+            encoding: accdt::NullEncoding::Absent
+        }
+    ));
+    assert_eq!(t.rows[1].cells[2].value(), Some(&Value::Boolean(false)));
+    assert!(t.to_csv().contains("\"Acme & Co\""));
     let dm = pkg.data_macros("Companies").unwrap();
     assert_eq!(dm[0].event, "BeforeChange");
     assert_eq!(

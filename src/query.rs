@@ -232,7 +232,12 @@ impl QueryDef {
         q.properties = doc
             .header_entries
             .iter()
-            .filter(|(k, _)| !matches!(k.as_str(), "Operation" | "Option" | "Name" | "Where" | "Having"))
+            .filter(|(k, _)| {
+                !matches!(
+                    k.as_str(),
+                    "Operation" | "Option" | "Name" | "Where" | "Having"
+                )
+            })
             .cloned()
             .collect();
         q
@@ -269,7 +274,7 @@ impl QueryDef {
                     text: self.skeleton(),
                     source: SqlSource::Skeleton,
                     complete: false,
-                }
+                };
             }
         }
         let mut complete = true;
@@ -355,7 +360,11 @@ impl QueryDef {
             if targets.is_empty() {
                 sql.push_str(&format!("INSERT INTO {}\n", bracket(target)));
             } else {
-                sql.push_str(&format!("INSERT INTO {} ({})\n", bracket(target), targets.join(", ")));
+                sql.push_str(&format!(
+                    "INSERT INTO {} ({})\n",
+                    bracket(target),
+                    targets.join(", ")
+                ));
             }
         }
         sql.push_str(&format!(
@@ -494,10 +503,21 @@ impl QueryDef {
                 _ => "INNER JOIN",
             };
             if out.is_empty() {
-                out = format!("{} {} {} ON {}", table_ref(&j.left_table), word, table_ref(&j.right_table), j.expression);
+                out = format!(
+                    "{} {} {} ON {}",
+                    table_ref(&j.left_table),
+                    word,
+                    table_ref(&j.right_table),
+                    j.expression
+                );
                 used.push(j.left_table.clone());
             } else {
-                out = format!("({out}) {} {} ON {}", word, table_ref(&j.right_table), j.expression);
+                out = format!(
+                    "({out}) {} {} ON {}",
+                    word,
+                    table_ref(&j.right_table),
+                    j.expression
+                );
             }
             used.push(j.right_table.clone());
         }
@@ -524,7 +544,10 @@ impl QueryDef {
         for c in &self.columns {
             sql.push_str(&format!(
                 "-- column: {}{}{}\n",
-                c.target.as_ref().map(|t| format!("{t} = ")).unwrap_or_default(),
+                c.target
+                    .as_ref()
+                    .map(|t| format!("{t} = "))
+                    .unwrap_or_default(),
                 c.expression,
                 c.alias
                     .as_ref()
