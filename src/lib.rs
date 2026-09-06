@@ -40,5 +40,5 @@ pub use design::{Control, Design, DesignKind, Event, Layout};
 pub use error::{Error, Result};
 pub use macros::{Macro, MacroAction};
 pub use package::{Module, ObjectEntry, ObjectKind, Package, Resource};
-pub use query::{Join, Operation, OutputColumn, Query, QueryDef};
-pub use table::{Column, Index, JetType, Table};
+pub use query::{Join, Operation, OutputColumn, Query, QueryDef, Sql, SqlSource};
+pub use table::{Column, Index, JetType, Table, Value};

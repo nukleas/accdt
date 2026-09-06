@@ -30,8 +30,16 @@ pub enum ObjectKind {
     Module,
 }
 
+impl std::str::FromStr for ObjectKind {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<ObjectKind, String> {
+        ObjectKind::from_type(s).ok_or_else(|| format!("unknown object kind {s:?}; expected table, query, form, report, macro or module"))
+    }
+}
+
 impl ObjectKind {
-    fn from_type(t: &str) -> Option<ObjectKind> {
+    /// Parse `Table`, `form`, `MACRO`, … (case-insensitive).
+    pub fn from_type(t: &str) -> Option<ObjectKind> {
         match t.to_ascii_lowercase().as_str() {
             "table" => Some(ObjectKind::Table),
             "query" => Some(ObjectKind::Query),
@@ -76,6 +84,7 @@ pub struct Module {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Resource {
     pub name: String,
     pub part: String,
@@ -100,7 +109,7 @@ impl Package {
         } else {
             let file = std::fs::File::open(path)?;
             Package::from_reader(file).map_err(|e| match e {
-                Error::Zip(_) => Error::NotAPackage(path.display().to_string()),
+                Error::Zip(zip::result::ZipError::InvalidArchive(_)) => Error::NotAPackage(path.display().to_string()),
                 other => other,
             })
         }
@@ -142,21 +151,26 @@ impl Package {
                 continue;
             }
             let Some((base, ext)) = file.rsplit_once('.') else { continue };
-            let rels = self.relationships_of(&format!("{OBJECTS}_rels/{file}.rels"));
-            let find = |suffix: &str| rels.iter().find(|(t, _)| t.ends_with(suffix)).map(|(_, target)| format!("{OBJECTS}{target}"));
+            let rels = self.relationships_of(&format!("{OBJECTS}_rels/{file}.rels"))?;
+            let find = |suffix: &str| rels.iter().find(|(t, _)| t.ends_with(suffix)).map(|(_, target)| resolve_target(OBJECTS, target));
             let metadata_part = find(REL_METADATA).or_else(|| {
                 let p = format!("{OBJECTS}properties/{base}_Metadata.xml");
                 self.parts.contains_key(&p).then_some(p)
             });
-            let (kind, obj_name) = match metadata_part.as_ref().and_then(|p| self.parts.get(p)).and_then(|b| parse_metadata(b)) {
+            let metadata = match &metadata_part {
+                Some(p) => parse_metadata(p, self.part_required(p)?)?,
+                None => None,
+            };
+            let (kind, obj_name) = match metadata {
                 Some((t, n)) => match ObjectKind::from_type(&t) {
                     Some(k) => (k, n),
                     None => continue,
                 },
                 None => {
-                    let prefixes = [("table", ObjectKind::Table), ("query", ObjectKind::Query), ("form", ObjectKind::Form), ("report", ObjectKind::Report), ("macro", ObjectKind::Macro), ("module", ObjectKind::Module)];
-                    match prefixes.iter().find(|(p, _)| base.starts_with(p)) {
-                        Some((p, k)) => (*k, base[p.len()..].to_string()),
+                    // No metadata part (hand-made packages): the file name carries the kind.
+                    let prefixes = ["table", "query", "form", "report", "macro", "module"];
+                    match prefixes.iter().find(|p| base.starts_with(*p)) {
+                        Some(p) => (ObjectKind::from_type(p).unwrap(), base[p.len()..].to_string()),
                         None => continue,
                     }
                 }
@@ -178,15 +192,17 @@ impl Package {
         Ok(out)
     }
 
-    /// `(relationship type, target)` pairs of an OPC `.rels` part; empty when absent.
-    fn relationships_of(&self, rels_part: &str) -> Vec<(String, String)> {
-        let Some(bytes) = self.parts.get(rels_part) else { return Vec::new() };
+    /// `(relationship type, target)` pairs of an OPC `.rels` part; empty when absent, an
+    /// error when present but malformed.
+    fn relationships_of(&self, rels_part: &str) -> Result<Vec<(String, String)>> {
+        let Some(bytes) = self.parts.get(rels_part) else { return Ok(Vec::new()) };
         let xml = text::decode_xml(bytes);
-        let Ok(doc) = roxmltree::Document::parse(&xml) else { return Vec::new() };
-        doc.descendants()
+        let doc = text::parse_xml(rels_part, &xml)?;
+        Ok(doc
+            .descendants()
             .filter(|n| n.is_element() && n.tag_name().name() == "Relationship")
             .filter_map(|n| Some((n.attribute("Type")?.to_string(), n.attribute("Target")?.to_string())))
-            .collect()
+            .collect())
     }
 
     /// Raw bytes of a part by its package path.
@@ -211,19 +227,34 @@ impl Package {
         self.objects.iter().filter(move |o| o.kind == kind)
     }
 
+    /// An object by kind and name (case-insensitive, as Access names are).
     pub fn object(&self, kind: ObjectKind, name: &str) -> Option<&ObjectEntry> {
         self.objects.iter().find(|o| o.kind == kind && o.name.eq_ignore_ascii_case(name))
     }
 
+    fn object_required(&self, kind: ObjectKind, name: &str) -> Result<&ObjectEntry> {
+        self.object(kind, name).ok_or_else(|| Error::MissingObject { kind: kind.as_str(), name: name.to_string() })
+    }
+
+    /// Template metadata; defaults when the part is absent.
     pub fn template(&self) -> Result<TemplateInfo> {
-        database::parse_template("template/template.xml", self.part_required("template/template.xml")?)
+        let p = "template/template.xml";
+        match self.part(p) {
+            Some(b) => database::parse_template(p, b),
+            None => Ok(TemplateInfo::default()),
+        }
     }
 
+    /// OPC core properties (title, description, …); defaults when the part is absent.
     pub fn core_properties(&self) -> Result<CoreProperties> {
-        database::parse_core("docProps/core.xml", self.part_required("docProps/core.xml")?)
+        let p = "docProps/core.xml";
+        match self.part(p) {
+            Some(b) => database::parse_core(p, b),
+            None => Ok(CoreProperties::default()),
+        }
     }
 
-    /// `databaseProperties.xml`: `AccessVersion`, `StartUpForm`, `AppTitle`, …
+    /// `databaseProperties.xml`: `AccessVersion`, `StartUpForm`, `AppTitle`, …; empty when absent.
     pub fn database_properties(&self) -> Result<Vec<Property>> {
         let p = "template/database/databaseProperties.xml";
         match self.part(p) {
@@ -260,20 +291,22 @@ impl Package {
         self.objects_of(ObjectKind::Table).map(|o| self.table_of(o)).collect()
     }
 
-    pub fn table(&self, name: &str) -> Result<Option<Table>> {
-        self.object(ObjectKind::Table, name).map(|o| self.table_of(o)).transpose()
+    /// A table by name; `Error::MissingObject` when there is none.
+    pub fn table(&self, name: &str) -> Result<Table> {
+        self.table_of(self.object_required(ObjectKind::Table, name)?)
     }
 
     fn table_of(&self, o: &ObjectEntry) -> Result<Table> {
         let mut t = table::parse_schema(&o.part, &o.name, self.part_required(&o.part)?)?;
-        if let Some(bytes) = o.data_part.as_ref().and_then(|dp| self.part(dp).map(|b| (dp, b))) {
-            table::parse_data(bytes.0, &mut t, bytes.1)?;
+        if let Some(dp) = &o.data_part {
+            table::parse_data(dp, &mut t, self.part_required(dp)?)?;
         }
         Ok(t)
     }
 
-    pub fn data_macros(&self, table: &ObjectEntry) -> Result<Vec<DataMacro>> {
-        match &table.datamacros_part {
+    /// Data macros attached to a table (empty when the table has none).
+    pub fn data_macros(&self, table: &str) -> Result<Vec<DataMacro>> {
+        match &self.object_required(ObjectKind::Table, table)?.datamacros_part {
             Some(p) => datamacro::parse(p, self.part_required(p)?),
             None => Ok(Vec::new()),
         }
@@ -287,34 +320,47 @@ impl Package {
         self.objects_of(ObjectKind::Report).map(|o| self.design_of(o, DesignKind::Report)).collect()
     }
 
-    pub fn form(&self, name: &str) -> Result<Option<Design>> {
-        self.object(ObjectKind::Form, name).map(|o| self.design_of(o, DesignKind::Form)).transpose()
+    pub fn form(&self, name: &str) -> Result<Design> {
+        self.design_of(self.object_required(ObjectKind::Form, name)?, DesignKind::Form)
     }
 
-    pub fn report(&self, name: &str) -> Result<Option<Design>> {
-        self.object(ObjectKind::Report, name).map(|o| self.design_of(o, DesignKind::Report)).transpose()
+    pub fn report(&self, name: &str) -> Result<Design> {
+        self.design_of(self.object_required(ObjectKind::Report, name)?, DesignKind::Report)
     }
 
     fn design_of(&self, o: &ObjectEntry, kind: DesignKind) -> Result<Design> {
-        Ok(Design::parse(&o.name, kind, text::decode(self.part_required(&o.part)?)))
+        Ok(Design::parse(&o.name, kind, self.object_text(o)?))
     }
 
     pub fn modules(&self) -> Result<Vec<Module>> {
-        self.objects_of(ObjectKind::Module)
-            .map(|o| Ok(Module { name: o.name.clone(), source: text::decode(self.part_required(&o.part)?) }))
-            .collect()
+        self.objects_of(ObjectKind::Module).map(|o| self.module_of(o)).collect()
+    }
+
+    pub fn module(&self, name: &str) -> Result<Module> {
+        self.module_of(self.object_required(ObjectKind::Module, name)?)
+    }
+
+    fn module_of(&self, o: &ObjectEntry) -> Result<Module> {
+        Ok(Module { name: o.name.clone(), source: self.object_text(o)? })
     }
 
     pub fn macros(&self) -> Result<Vec<Macro>> {
-        self.objects_of(ObjectKind::Macro)
-            .map(|o| Ok(Macro::parse(&o.name, text::decode(self.part_required(&o.part)?))))
-            .collect()
+        self.objects_of(ObjectKind::Macro).map(|o| Ok(Macro::parse(&o.name, self.object_text(o)?))).collect()
+    }
+
+    /// A standalone macro by name.
+    pub fn ui_macro(&self, name: &str) -> Result<Macro> {
+        let o = self.object_required(ObjectKind::Macro, name)?;
+        Ok(Macro::parse(&o.name, self.object_text(o)?))
     }
 
     pub fn queries(&self) -> Result<Vec<Query>> {
-        self.objects_of(ObjectKind::Query)
-            .map(|o| Ok(Query::parse(&o.name, text::decode(self.part_required(&o.part)?))))
-            .collect()
+        self.objects_of(ObjectKind::Query).map(|o| Ok(Query::parse(&o.name, self.object_text(o)?))).collect()
+    }
+
+    pub fn query(&self, name: &str) -> Result<Query> {
+        let o = self.object_required(ObjectKind::Query, name)?;
+        Ok(Query::parse(&o.name, self.object_text(o)?))
     }
 
     /// Raw text of any non-table object (SaveAsText or VBA).
@@ -323,7 +369,7 @@ impl Package {
     }
 
     /// Shared images and other resources (`template/database/resources/`), with their display names.
-    pub fn resources(&self) -> Vec<Resource> {
+    pub fn resources(&self) -> Result<Vec<Resource>> {
         const DIR: &str = "template/database/resources/";
         let mut out = Vec::new();
         for (name, bytes) in &self.parts {
@@ -331,25 +377,46 @@ impl Package {
             if file.contains('/') || file.ends_with("-name.txt") {
                 continue;
             }
-            let rels = self.relationships_of(&format!("{DIR}_rels/{file}.rels"));
+            let rels = self.relationships_of(&format!("{DIR}_rels/{file}.rels"))?;
             let display = rels
                 .iter()
                 .find(|(t, _)| t.ends_with("resource-name"))
-                .and_then(|(_, target)| self.parts.get(&format!("{DIR}{target}")))
+                .and_then(|(_, target)| self.parts.get(&resolve_target(DIR, target)))
                 .map(|b| text::decode(b).trim().to_string())
                 .unwrap_or_else(|| file.to_string());
             out.push(Resource { name: display, part: name.clone(), bytes: bytes.clone() });
         }
-        out
+        Ok(out)
     }
 }
 
-fn parse_metadata(bytes: &[u8]) -> Option<(String, String)> {
+/// Resolve an OPC relationship target against the directory of the source part:
+/// absolute targets (`/template/...`) are package-rooted, others are relative with `.`/`..` segments.
+fn resolve_target(base_dir: &str, target: &str) -> String {
+    let segments: Vec<&str> = match target.strip_prefix('/') {
+        Some(abs) => abs.split('/').collect(),
+        None => base_dir.trim_end_matches('/').split('/').chain(target.split('/')).collect(),
+    };
+    let mut out: Vec<&str> = Vec::with_capacity(segments.len());
+    for seg in segments {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            s => out.push(s),
+        }
+    }
+    out.join("/")
+}
+
+/// `(Type, Name)` from an object's metadata part.
+fn parse_metadata(part: &str, bytes: &[u8]) -> Result<Option<(String, String)>> {
     let xml = text::decode_xml(bytes);
-    let doc = roxmltree::Document::parse(&xml).ok()?;
+    let doc = text::parse_xml(part, &xml)?;
     let root = doc.root_element();
     let get = |k: &str| root.children().find(|c| c.is_element() && c.tag_name().name() == k).and_then(|c| c.text()).map(|t| t.to_string());
-    Some((get("Type")?, get("Name")?))
+    Ok(get("Type").zip(get("Name")))
 }
 
 fn walk_dir(dir: &Path, base: &Path, out: &mut BTreeMap<String, Vec<u8>>) -> Result<()> {
@@ -363,4 +430,18 @@ fn walk_dir(dir: &Path, base: &Path, out: &mut BTreeMap<String, Vec<u8>>) -> Res
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_target;
+
+    #[test]
+    fn resolves_relationship_targets() {
+        let base = "template/database/objects/";
+        assert_eq!(resolve_target(base, "sampleData/t.xml"), "template/database/objects/sampleData/t.xml");
+        assert_eq!(resolve_target(base, "./sampleData/t.xml"), "template/database/objects/sampleData/t.xml");
+        assert_eq!(resolve_target(base, "../relationships.xml"), "template/database/relationships.xml");
+        assert_eq!(resolve_target(base, "/template/x.xml"), "template/x.xml");
+    }
 }

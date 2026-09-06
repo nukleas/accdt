@@ -1,6 +1,6 @@
 //! Standalone macros (the `Macro` objects of the navigation pane).
 
-use crate::saveastext;
+use crate::saveastext::{self, Node};
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -24,19 +24,26 @@ impl Macro {
     /// Parse a macro from SaveAsText text.
     pub fn parse(name: &str, text: String) -> Macro {
         let doc = saveastext::parse(&text);
-        let actions = doc
-            .blocks
-            .iter()
-            .filter(|b| b.get("Action").is_some())
-            .map(|b| MacroAction {
-                condition: b.get("Condition").map(String::from),
-                action: b.get("Action").unwrap_or("").to_string(),
-                arguments: b.values("Argument").into_iter().map(String::from).collect(),
-                comment: b.get("Comment").map(String::from),
-            })
-            .collect();
-        Macro { name: name.to_string(), version: doc.get("Version").map(String::from), actions, text }
+        Macro { name: name.to_string(), version: doc.get("Version").map(String::from), actions: actions_of(&doc.blocks), text }
     }
+
+    /// A macro embedded in a form or report design (an `On…EmMacro` block).
+    pub fn from_node(name: &str, node: &Node) -> Macro {
+        Macro { name: name.to_string(), version: node.get("Version").map(String::from), actions: actions_of(&node.children), text: String::new() }
+    }
+}
+
+fn actions_of(blocks: &[Node]) -> Vec<MacroAction> {
+    blocks
+        .iter()
+        .filter(|b| b.get("Action").is_some() || b.get("Comment").is_some())
+        .map(|b| MacroAction {
+            condition: b.get("Condition").map(String::from),
+            action: b.get("Action").unwrap_or("").to_string(),
+            arguments: b.values("Argument").into_iter().map(String::from).collect(),
+            comment: b.get("Comment").map(String::from),
+        })
+        .collect()
 }
 
 #[cfg(test)]

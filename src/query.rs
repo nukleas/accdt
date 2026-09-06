@@ -44,6 +44,7 @@ pub struct OutputColumn {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Join {
+    /// Table name or alias, as the definition refers to it.
     pub left_table: String,
     pub right_table: String,
     pub expression: String,
@@ -65,10 +66,38 @@ pub struct QueryDef {
     pub group_by: Vec<String>,
     /// `(expression, descending)`.
     pub order_by: Vec<(String, bool)>,
-    /// `(name, type code)` from a `Parameters` block.
+    /// `(name, DAO type code)` from a `Parameters` block.
     pub parameters: Vec<(String, String)>,
-    /// `dbXxx "Name" =Value` lines (`ReturnsRecords`, `ODBCTimeout`, …).
+    /// `dbXxx "Name" =Value` lines (`ReturnsRecords`, `ODBCTimeout`, `SQL`, …).
     pub properties: Vec<(String, String)>,
+}
+
+/// Where the SQL text came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum SqlSource {
+    /// Access stored the SQL text itself (union, pass-through, `TOP`, DDL, and SQL-view queries).
+    Stored,
+    /// Rebuilt from the query's structured definition.
+    Reconstructed,
+    /// Not SQL: a commented dump of the definition for manual rewriting.
+    Skeleton,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct Sql {
+    pub text: String,
+    pub source: SqlSource,
+    /// False when parts had to be left as comments (a join that could not be placed).
+    pub complete: bool,
+}
+
+impl Sql {
+    /// True when `text` is SQL rather than a commented skeleton.
+    pub fn is_executable(&self) -> bool {
+        self.source != SqlSource::Skeleton && self.complete
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -86,9 +115,7 @@ impl Query {
         Query { name: name.to_string(), definition: QueryDef::from_document(&doc), text }
     }
 
-    /// SQL for the query. `complete` is false when parts had to be left as comments
-    /// (non-select operations, joins that could not be placed).
-    pub fn to_sql(&self) -> (String, bool) {
+    pub fn to_sql(&self) -> Sql {
         self.definition.to_sql()
     }
 }
@@ -102,13 +129,13 @@ impl QueryDef {
             having: doc.get("Having").map(String::from),
             ..Default::default()
         };
-        let entries = |kind: &str| doc.block(kind).map(|b| b.entries.clone()).unwrap_or_default();
+        let entries = |kind: &str| doc.block(kind).into_iter().flat_map(|b| b.entries.iter());
         for (k, v) in entries("InputTables") {
             match k.as_str() {
-                "Name" => q.tables.push((v, None)),
+                "Name" => q.tables.push((v.clone(), None)),
                 "Alias" => {
                     if let Some(last) = q.tables.last_mut() {
-                        last.1 = Some(v);
+                        last.1 = Some(v.clone());
                     }
                 }
                 _ => {}
@@ -117,17 +144,17 @@ impl QueryDef {
         let mut pending_alias = None;
         for (k, v) in entries("OutputColumns") {
             match k.as_str() {
-                "Alias" => pending_alias = Some(v),
-                "Expression" => q.columns.push(OutputColumn { expression: v, alias: pending_alias.take() }),
+                "Alias" => pending_alias = Some(v.clone()),
+                "Expression" => q.columns.push(OutputColumn { expression: v.clone(), alias: pending_alias.take() }),
                 _ => {}
             }
         }
         let (mut l, mut r, mut e) = (None, None, None);
         for (k, v) in entries("Joins") {
             match k.as_str() {
-                "LeftTable" => l = Some(v),
-                "RightTable" => r = Some(v),
-                "Expression" => e = Some(v),
+                "LeftTable" => l = Some(v.clone()),
+                "RightTable" => r = Some(v.clone()),
+                "Expression" => e = Some(v.clone()),
                 "Flag" => {
                     if let (Some(lt), Some(rt), Some(ex)) = (l.take(), r.take(), e.take()) {
                         q.joins.push(Join { left_table: lt, right_table: rt, expression: ex, flag: v.parse().unwrap_or(1) });
@@ -136,7 +163,7 @@ impl QueryDef {
                 _ => {}
             }
         }
-        q.group_by = entries("Groups").into_iter().filter(|(k, _)| k == "Expression").map(|(_, v)| v).collect();
+        q.group_by = entries("Groups").filter(|(k, _)| k == "Expression").map(|(_, v)| v.clone()).collect();
         let mut last: Option<String> = None;
         for (k, v) in entries("OrderBy") {
             match k.as_str() {
@@ -144,7 +171,7 @@ impl QueryDef {
                     if let Some(x) = last.take() {
                         q.order_by.push((x, false));
                     }
-                    last = Some(v);
+                    last = Some(v.clone());
                 }
                 "Flag" => {
                     if let Some(x) = last.take() {
@@ -160,10 +187,10 @@ impl QueryDef {
         let mut pname = None;
         for (k, v) in entries("Parameters") {
             match k.as_str() {
-                "Name" => pname = Some(v),
+                "Name" => pname = Some(v.clone()),
                 "Type" => {
                     if let Some(n) = pname.take() {
-                        q.parameters.push((n, v));
+                        q.parameters.push((n, v.clone()));
                     }
                 }
                 _ => {}
@@ -178,48 +205,50 @@ impl QueryDef {
         q
     }
 
-    pub fn to_sql(&self) -> (String, bool) {
-        let mut complete = true;
-        let table_ref = |name: &str| match self.tables.iter().find(|(n, _)| n == name) {
-            Some((n, Some(a))) => format!("{} AS {}", bracket(n), bracket(a)),
-            _ => bracket(name),
-        };
-        if self.operation != Some(Operation::Select) {
-            let mut sql = format!("-- {:?} query: not a select; definition follows for manual rewriting\n", self.operation.unwrap_or(Operation::Unknown(0)));
-            for (n, a) in &self.tables {
-                sql.push_str(&format!("-- table: {n}{}\n", a.as_ref().map(|a| format!(" AS {a}")).unwrap_or_default()));
-            }
-            for c in &self.columns {
-                sql.push_str(&format!("-- column: {}{}\n", c.expression, c.alias.as_ref().map(|a| format!(" AS {a}")).unwrap_or_default()));
-            }
-            for j in &self.joins {
-                sql.push_str(&format!("-- join({}): {} / {} ON {}\n", j.flag, j.left_table, j.right_table, j.expression));
-            }
-            if let Some(w) = &self.where_clause {
-                sql.push_str(&format!("-- where: {w}\n"));
-            }
-            return (sql, false);
+    pub fn property(&self, name: &str) -> Option<&str> {
+        self.properties.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
+    }
+
+    /// SQL text Access stored verbatim, when the query is defined by SQL rather than structure.
+    pub fn stored_sql(&self) -> Option<&str> {
+        self.property("SQL").map(str::trim).filter(|s| !s.is_empty())
+    }
+
+    pub fn to_sql(&self) -> Sql {
+        if let Some(sql) = self.stored_sql() {
+            return Sql { text: sql.to_string(), source: SqlSource::Stored, complete: true };
         }
+        if self.operation != Some(Operation::Select) {
+            return Sql { text: self.skeleton(), source: SqlSource::Skeleton, complete: false };
+        }
+        let mut complete = true;
+        // A table is referred to by its alias when it has one, otherwise by its name.
+        let key_of = |t: &(String, Option<String>)| t.1.clone().unwrap_or_else(|| t.0.clone());
+        let table_ref = |key: &str| match self.tables.iter().find(|t| key_of(t) == key) {
+            Some((n, Some(a))) => format!("{} AS {}", bracket(n), bracket(a)),
+            Some((n, None)) => bracket(n),
+            None => bracket(key),
+        };
         let join_word = |flag: u32, swapped: bool| match (flag, swapped) {
             (2, false) | (3, true) => "LEFT JOIN",
             (3, false) | (2, true) => "RIGHT JOIN",
             _ => "INNER JOIN",
         };
         let mut from = String::new();
-        let mut joined: Vec<String> = Vec::new();
+        let mut used: Vec<String> = Vec::new();
         for j in &self.joins {
-            let has_l = joined.contains(&j.left_table);
-            let has_r = joined.contains(&j.right_table);
+            let has_l = used.contains(&j.left_table);
+            let has_r = used.contains(&j.right_table);
             if from.is_empty() {
                 from = format!("{} {} {} ON {}", table_ref(&j.left_table), join_word(j.flag, false), table_ref(&j.right_table), j.expression);
-                joined.push(j.left_table.clone());
-                joined.push(j.right_table.clone());
+                used.push(j.left_table.clone());
+                used.push(j.right_table.clone());
             } else if has_l && !has_r {
                 from = format!("({from}) {} {} ON {}", join_word(j.flag, false), table_ref(&j.right_table), j.expression);
-                joined.push(j.right_table.clone());
+                used.push(j.right_table.clone());
             } else if has_r && !has_l {
                 from = format!("({from}) {} {} ON {}", join_word(j.flag, true), table_ref(&j.left_table), j.expression);
-                joined.push(j.left_table.clone());
+                used.push(j.left_table.clone());
             } else {
                 complete = false;
                 from.push_str(&format!(" /* unplaced join: {} {} {} ON {} */", j.left_table, join_word(j.flag, false), j.right_table, j.expression));
@@ -229,8 +258,8 @@ impl QueryDef {
         if !from.is_empty() {
             from_parts.push(from);
         }
-        for (n, _) in self.tables.iter().filter(|(n, _)| !joined.contains(n)) {
-            from_parts.push(table_ref(n));
+        for t in self.tables.iter().filter(|t| !used.contains(&key_of(t))) {
+            from_parts.push(table_ref(&key_of(t)));
         }
         let columns: Vec<String> = self
             .columns
@@ -240,11 +269,16 @@ impl QueryDef {
                 None => c.expression.clone(),
             })
             .collect();
-        let mut sql = format!(
+        let mut sql = String::new();
+        if !self.parameters.is_empty() {
+            let params: Vec<String> = self.parameters.iter().map(|(n, t)| format!("{} {}", bracket(n), parameter_type(t))).collect();
+            sql.push_str(&format!("PARAMETERS {};\n", params.join(", ")));
+        }
+        sql.push_str(&format!(
             "SELECT {}{}\n",
             if self.option & 1 == 1 { "DISTINCT " } else { "" },
             if columns.is_empty() { "*".to_string() } else { columns.join(", ") }
-        );
+        ));
         if !from_parts.is_empty() {
             sql.push_str(&format!("FROM {}\n", from_parts.join(", ")));
         }
@@ -262,12 +296,59 @@ impl QueryDef {
             sql.push_str(&format!("ORDER BY {}\n", o.join(", ")));
         }
         sql.push(';');
-        (sql, complete)
+        Sql { text: sql, source: SqlSource::Reconstructed, complete }
+    }
+
+    fn skeleton(&self) -> String {
+        let mut sql = format!("-- {:?} query: no stored SQL and not a select; definition follows for manual rewriting\n", self.operation.unwrap_or(Operation::Unknown(0)));
+        for (n, a) in &self.tables {
+            sql.push_str(&format!("-- table: {n}{}\n", a.as_ref().map(|a| format!(" AS {a}")).unwrap_or_default()));
+        }
+        for c in &self.columns {
+            sql.push_str(&format!("-- column: {}{}\n", c.expression, c.alias.as_ref().map(|a| format!(" AS {a}")).unwrap_or_default()));
+        }
+        for j in &self.joins {
+            sql.push_str(&format!("-- join({}): {} / {} ON {}\n", j.flag, j.left_table, j.right_table, j.expression));
+        }
+        if let Some(w) = &self.where_clause {
+            sql.push_str(&format!("-- where: {w}\n"));
+        }
+        sql
     }
 }
 
+/// Access SQL type name for a DAO type code in a `Parameters` block.
+fn parameter_type(code: &str) -> &'static str {
+    match code.trim() {
+        "1" => "Bit",
+        "2" => "Byte",
+        "3" => "Short",
+        "4" => "Long",
+        "5" => "Currency",
+        "6" => "Single",
+        "7" => "Double",
+        "8" => "DateTime",
+        "9" | "11" => "Binary",
+        "10" => "Text",
+        "12" => "LongText",
+        "15" => "Guid",
+        "20" => "Decimal",
+        _ => "Text",
+    }
+}
+
+const RESERVED: &[&str] = &[
+    "order", "group", "date", "time", "name", "value", "key", "index", "level", "user", "table", "select", "from", "where", "by", "count", "sum", "min",
+    "max", "avg", "year", "month", "day", "desc", "asc", "text", "memo", "position", "section", "size", "type", "column", "field", "note", "password",
+    "percent", "procedure", "property", "references", "report", "row", "rows", "string", "unique", "update", "values", "view", "action", "add", "all",
+    "alter", "and", "any", "as", "between", "case", "check", "column", "constraint", "create", "delete", "distinct", "drop", "exists", "false", "first",
+    "in", "inner", "insert", "into", "is", "join", "last", "left", "like", "not", "null", "on", "option", "or", "outer", "parameters", "pivot", "right",
+    "set", "some", "top", "transform", "true", "union",
+];
+
 fn bracket(name: &str) -> String {
-    if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') { name.to_string() } else { format!("[{name}]") }
+    let plain = name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.chars().next().is_some_and(|c| c.is_ascii_digit());
+    if plain && !RESERVED.contains(&name.to_ascii_lowercase().as_str()) { name.to_string() } else { format!("[{name}]") }
 }
 
 #[cfg(test)]
@@ -275,22 +356,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn select_with_join_where_order() {
-        let text = "Operation =1\nOption =0\nWhere =\"(((PV.VendorID)=[Parent]![VendorID]))\"\nBegin InputTables\n    Name =\"Products\"\n    Name =\"ProductVendors\"\n    Alias =\"PV\"\nEnd\nBegin OutputColumns\n    Expression =\"Products.ProductID\"\n    Alias =\"Cost\"\n    Expression =\"Products.StandardUnitCost\"\nEnd\nBegin Joins\n    LeftTable =\"Products\"\n    RightTable =\"ProductVendors\"\n    Expression =\"Products.ProductID = PV.ProductID\"\n    Flag =2\nEnd\nBegin OrderBy\n    Expression =\"Products.ProductName\"\n    Flag =1\nEnd\ndbBoolean \"ReturnsRecords\" =\"-1\"\n";
+    fn select_with_aliased_joins_where_order_and_parameters() {
+        let text = "Operation =1\nOption =0\nWhere =\"(((PV.VendorID)=[Parent]![VendorID]))\"\nBegin InputTables\n    Name =\"Products\"\n    Name =\"ProductVendors\"\n    Alias =\"PV\"\n    Name =\"Order\"\nEnd\nBegin OutputColumns\n    Expression =\"Products.ProductID\"\n    Alias =\"Cost\"\n    Expression =\"Products.StandardUnitCost\"\nEnd\nBegin Joins\n    LeftTable =\"Products\"\n    RightTable =\"PV\"\n    Expression =\"Products.ProductID = PV.ProductID\"\n    Flag =2\nEnd\nBegin OrderBy\n    Expression =\"Products.ProductName\"\n    Flag =1\nEnd\nBegin Parameters\n    Name =\"Which\"\n    Type =10\nEnd\ndbBoolean \"ReturnsRecords\" =\"-1\"\n";
         let q = Query::parse("q", text.to_string());
         assert_eq!(q.definition.operation, Some(Operation::Select));
         assert_eq!(q.definition.tables[1], ("ProductVendors".to_string(), Some("PV".to_string())));
-        assert_eq!(q.definition.properties, vec![("ReturnsRecords".to_string(), "-1".to_string())]);
-        let (sql, complete) = q.to_sql();
-        assert!(complete);
-        assert_eq!(sql, "SELECT Products.ProductID, Products.StandardUnitCost AS Cost\nFROM Products LEFT JOIN ProductVendors AS PV ON Products.ProductID = PV.ProductID\nWHERE (((PV.VendorID)=[Parent]![VendorID]))\nORDER BY Products.ProductName DESC\n;");
+        assert_eq!(q.definition.property("ReturnsRecords"), Some("-1"));
+        let sql = q.to_sql();
+        assert!(sql.complete && sql.source == SqlSource::Reconstructed);
+        assert_eq!(
+            sql.text,
+            "PARAMETERS Which Text;\nSELECT Products.ProductID, Products.StandardUnitCost AS Cost\nFROM Products LEFT JOIN ProductVendors AS PV ON Products.ProductID = PV.ProductID, [Order]\nWHERE (((PV.VendorID)=[Parent]![VendorID]))\nORDER BY Products.ProductName DESC\n;"
+        );
     }
 
     #[test]
-    fn non_select_is_commented() {
+    fn stored_sql_wins() {
+        let q = Query::parse("q", "dbMemo \"SQL\" =\"SELECT TOP 20 qryOrderList.* FROM qryOrderList;\\015\\012\"\ndbBoolean \"ReturnsRecords\" =\"-1\"\n".to_string());
+        let sql = q.to_sql();
+        assert_eq!(sql.source, SqlSource::Stored);
+        assert_eq!(sql.text, "SELECT TOP 20 qryOrderList.* FROM qryOrderList;");
+        assert!(sql.is_executable());
+    }
+
+    #[test]
+    fn non_select_without_sql_is_a_skeleton() {
         let q = Query::parse("q", "Operation =5\nBegin InputTables\n    Name =\"T\"\nEnd\n".to_string());
-        let (sql, complete) = q.to_sql();
-        assert!(!complete);
-        assert!(sql.starts_with("-- Delete query"));
+        let sql = q.to_sql();
+        assert_eq!(sql.source, SqlSource::Skeleton);
+        assert!(!sql.is_executable());
+        assert!(sql.text.starts_with("-- Delete query"));
     }
 }

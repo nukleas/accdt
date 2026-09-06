@@ -1,5 +1,7 @@
 //! Tables: schema from the object's XML Schema part, rows from its sample-data part.
 
+use std::collections::BTreeMap;
+
 use crate::text::{self, unescape_xml_name};
 
 const XSD: &str = "http://www.w3.org/2001/XMLSchema";
@@ -90,6 +92,43 @@ pub struct Index {
     pub order: Vec<String>,
 }
 
+/// A cell from the sample data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum Value {
+    Text(String),
+    /// Attachment or multi-valued field: one record per child element, each a map of its
+    /// child elements (`FileName`, `FileData` as base64, `FileType`, or `Value`).
+    Complex(Vec<BTreeMap<String, String>>),
+}
+
+impl Value {
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Value::Text(s) => Some(s),
+            Value::Complex(_) => None,
+        }
+    }
+
+    /// Text for CSV: scalars verbatim; complex values as `key=value` pairs joined with `; `,
+    /// records separated by ` | `, binary payloads summarised by size.
+    pub fn to_csv_text(&self) -> String {
+        match self {
+            Value::Text(s) => s.clone(),
+            Value::Complex(records) => records
+                .iter()
+                .map(|r| {
+                    r.iter()
+                        .map(|(k, v)| if k == "FileData" { format!("{k}=<{} base64 chars>", v.len()) } else { format!("{k}={v}") })
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                })
+                .collect::<Vec<_>>()
+                .join(" | "),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Table {
@@ -99,7 +138,7 @@ pub struct Table {
     /// `od:tableProperty` entries: `(name, type code, value)`.
     pub properties: Vec<(String, String, String)>,
     /// Rows from the sample-data part, cells in `columns` order (`None` for absent/null).
-    pub rows: Vec<Vec<Option<String>>>,
+    pub rows: Vec<Vec<Option<Value>>>,
     /// Whether a sample-data part existed (a table can legitimately have zero rows).
     pub has_data_part: bool,
 }
@@ -109,8 +148,9 @@ impl Table {
         self.indexes.iter().find(|i| i.primary)
     }
 
+    /// Column by name, case-insensitively (Access names are case-insensitive).
     pub fn column(&self, name: &str) -> Option<&Column> {
-        self.columns.iter().find(|c| c.name == name)
+        self.columns.iter().find(|c| c.name.eq_ignore_ascii_case(name))
     }
 
     /// RFC 4180 CSV with a header row; every value quoted.
@@ -119,7 +159,7 @@ impl Table {
         let mut out = self.columns.iter().map(|c| q(&c.name)).collect::<Vec<_>>().join(",");
         out.push('\n');
         for row in &self.rows {
-            let line: Vec<String> = row.iter().map(|v| v.as_deref().map(q).unwrap_or_default()).collect();
+            let line: Vec<String> = row.iter().map(|v| v.as_ref().map(|v| q(&v.to_csv_text())).unwrap_or_default()).collect();
             out.push_str(&line.join(","));
             out.push('\n');
         }
@@ -141,7 +181,7 @@ pub(crate) fn parse_schema(part: &str, name: &str, bytes: &[u8]) -> crate::Resul
             let key = n.attribute("index-key").unwrap_or("");
             table.indexes.push(Index {
                 name: n.attribute("index-name").unwrap_or("").to_string(),
-                columns: key.split_whitespace().map(String::from).collect(),
+                columns: key.split_whitespace().map(unescape_xml_name).collect(),
                 primary: n.attribute("primary") == Some("yes"),
                 unique: n.attribute("unique") == Some("yes"),
                 order: n.attribute("order").unwrap_or("").split_whitespace().map(String::from).collect(),
@@ -186,6 +226,8 @@ pub(crate) fn parse_schema(part: &str, name: &str, bytes: &[u8]) -> crate::Resul
 }
 
 /// Fill `table.rows` from a sample-data part (`<root><xsd:schema/>…<dataroot><T>…</T></dataroot></root>`).
+/// A cell with element children (attachments, multi-valued fields) becomes a
+/// [`Value::Complex`] record; repeated cells with the same name accumulate records.
 pub(crate) fn parse_data(part: &str, table: &mut Table, bytes: &[u8]) -> crate::Result<()> {
     let xml = text::decode_xml(bytes);
     let doc = text::parse_xml(part, &xml)?;
@@ -194,12 +236,11 @@ pub(crate) fn parse_data(part: &str, table: &mut Table, bytes: &[u8]) -> crate::
         return Ok(());
     };
     for row in dataroot.children().filter(|n| n.is_element()) {
-        let mut cells: Vec<Option<String>> = vec![None; table.columns.len()];
+        let mut cells: Vec<Option<Value>> = vec![None; table.columns.len()];
         for cell in row.children().filter(|n| n.is_element()) {
             let name = unescape_xml_name(cell.tag_name().name());
-            let value = cell.text().map(|t| t.to_string()).unwrap_or_default();
-            match table.columns.iter().position(|c| c.name == name) {
-                Some(i) => cells[i] = Some(value),
+            let index = match table.columns.iter().position(|c| c.name == name) {
+                Some(i) => i,
                 None => {
                     table.columns.push(Column {
                         name,
@@ -214,8 +255,23 @@ pub(crate) fn parse_data(part: &str, table: &mut Table, bytes: &[u8]) -> crate::
                     for r in table.rows.iter_mut() {
                         r.push(None);
                     }
-                    cells.push(Some(value));
+                    cells.push(None);
+                    table.columns.len() - 1
                 }
+            };
+            let has_children = cell.children().any(|c| c.is_element());
+            if has_children {
+                let record: BTreeMap<String, String> = cell
+                    .children()
+                    .filter(|c| c.is_element())
+                    .map(|c| (unescape_xml_name(c.tag_name().name()), c.text().map(|t| t.split_whitespace().collect::<String>()).unwrap_or_default()))
+                    .collect();
+                match &mut cells[index] {
+                    Some(Value::Complex(records)) => records.push(record),
+                    slot => *slot = Some(Value::Complex(vec![record])),
+                }
+            } else {
+                cells[index] = Some(Value::Text(cell.text().unwrap_or("").to_string()));
             }
         }
         table.rows.push(cells);

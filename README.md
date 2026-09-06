@@ -28,10 +28,13 @@ for f in pkg.forms()? {
     for e in f.events() {
         println!("  {}.{} -> {}", e.owner, e.event, e.value);
     }
+    for (owner_event, m) in f.embedded_macros() {
+        println!("  macro {owner_event}: {} actions", m.actions.len());
+    }
 }
 for q in pkg.queries()? {
-    let (sql, complete) = q.to_sql();
-    println!("{}: {sql}{}", q.name, if complete { "" } else { " (partial)" });
+    let sql = q.to_sql();
+    println!("{}: {} ({:?}{})", q.name, sql.text, sql.source, if sql.complete { "" } else { ", partial" });
 }
 for r in pkg.vba_references()? {
     println!("{} {}", r.guid, r.known_name().unwrap_or("?"));
@@ -45,12 +48,12 @@ What is covered:
 |---|---|
 | `template/template.xml`, `docProps/core.xml` | `template()`, `core_properties()` |
 | `databaseProperties.xml` | `database_properties()` (AccessVersion, StartUpForm, AppTitle, …) |
-| Tables: `objects/table*.xsd` + `sampleData/*.xml` | `tables()`: columns with `od:jetType`/`od:sqlSType`, required, autoincrement, max length, field properties; indexes; table properties; rows; `to_csv()` |
+| Tables: `objects/table*.xsd` + `sampleData/*.xml` | `tables()`, `table(name)`: columns with `od:jetType`/`od:sqlSType`, required, autoincrement, max length, field properties; indexes; table properties; rows (attachments and multi-valued cells as structured `Value::Complex` records); `to_csv()` |
 | `dataMacros/*.axl` | `data_macros(table)` |
-| Forms and reports (SaveAsText) | `forms()`, `reports()`: properties, control tree with layout, sections, events, embedded macros (decoded), code-behind VBA, per-type control defaults |
-| Macros (SaveAsText) | `macros()`: actions with conditions and arguments |
-| Queries (SaveAsText) | `queries()`: tables, columns, joins, where/having/group/order, parameters, properties; `to_sql()` rebuilds select queries |
-| Modules | `modules()` |
+| Forms and reports (SaveAsText) | `forms()`, `reports()`, `form(name)`, `report(name)`: properties, control tree with layout, sections, events (`On*` and `AfterUpdate`-style), embedded macros as parsed `Macro`s, code-behind VBA, per-type control defaults |
+| Macros (SaveAsText) | `macros()`, `ui_macro(name)`: actions with conditions and arguments |
+| Queries (SaveAsText) | `queries()`, `query(name)`: tables and aliases, columns, joins, where/having/group/order, parameters, properties; `to_sql()` returns the stored SQL when Access kept it (union, pass-through, `TOP`), otherwise rebuilds select queries with alias-aware joins and a `PARAMETERS` clause, and says which it did |
+| Modules | `modules()`, `module(name)` |
 | `relationships.xml` | `relationships()` with integrity and cascade flags |
 | `vbaReferences.xml` | `vba_references()` with names for well-known type libraries and a 32-bit-only flag |
 | `resources/` | `resources()` |
@@ -58,7 +61,14 @@ What is covered:
 | Anything else | `part(name)` |
 
 The `saveastext` module is public: it parses any `Application.SaveAsText` output, not only
-templates.
+templates. It joins wrapped string continuations, decodes `\"`, `\\` and `\015`-style
+escapes, keeps `Key = Begin` blocks as hex values or nested blocks (embedded macros), and
+reports structural problems in `Document::warnings` instead of failing.
+
+Lookups are by name, case-insensitively, and return `Error::MissingObject` when absent.
+Optional parts (`databaseProperties.xml`, `relationships.xml`, `vbaReferences.xml`,
+`template.xml`, `docProps/core.xml`) read as empty or default when missing; malformed XML
+anywhere is an `Error::Xml` naming the part.
 
 ## Command line
 

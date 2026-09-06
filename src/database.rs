@@ -8,10 +8,13 @@ use crate::text;
 pub struct TemplateInfo {
     pub template_format: Option<String>,
     pub required_access_version: Option<String>,
+    pub access_services_version: Option<String>,
     pub template_type: Option<String>,
     pub data_locale: Option<String>,
     pub ui_locale: Option<String>,
     pub collating_order: Option<String>,
+    pub flip_right_to_left: bool,
+    pub perform_localization_fixup: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -20,6 +23,8 @@ pub struct CoreProperties {
     pub title: Option<String>,
     pub description: Option<String>,
     pub creator: Option<String>,
+    pub category: Option<String>,
+    pub keywords: Option<String>,
     pub created: Option<String>,
     pub modified: Option<String>,
 }
@@ -61,6 +66,13 @@ impl Relationship {
     }
     pub fn one_to_one(&self) -> bool {
         self.flags & 0x1 != 0
+    }
+    /// Relationship window shows a left outer join from the child table.
+    pub fn left_join(&self) -> bool {
+        self.flags & 0x0100_0000 != 0
+    }
+    pub fn right_join(&self) -> bool {
+        self.flags & 0x0200_0000 != 0
     }
 }
 
@@ -118,10 +130,13 @@ pub(crate) fn parse_template(part: &str, bytes: &[u8]) -> crate::Result<Template
     Ok(TemplateInfo {
         template_format: child_text(root, "TemplateFormat"),
         required_access_version: child_text(root, "RequiredAccessVersion"),
+        access_services_version: child_text(root, "AccessServicesVersion"),
         template_type: child_text(root, "Type"),
         data_locale: child_text(root, "DataLocale"),
         ui_locale: child_text(root, "UILocale"),
         collating_order: child_text(root, "CollatingOrder"),
+        flip_right_to_left: child_text(root, "FlipRightToLeft").is_some_and(|v| v == "1"),
+        perform_localization_fixup: child_text(root, "PerformLocalizationFixup").is_some_and(|v| v == "1"),
     })
 }
 
@@ -133,6 +148,8 @@ pub(crate) fn parse_core(part: &str, bytes: &[u8]) -> crate::Result<CoreProperti
         title: child_text(root, "title"),
         description: child_text(root, "description"),
         creator: child_text(root, "creator"),
+        category: child_text(root, "category"),
+        keywords: child_text(root, "keywords"),
         created: child_text(root, "created"),
         modified: child_text(root, "modified"),
     })
@@ -162,6 +179,9 @@ pub(crate) fn parse_relationships(part: &str, bytes: &[u8]) -> crate::Result<Vec
         let name = get("szRelationship");
         let pair = (get("szColumn"), get("szReferencedColumn"));
         let position: usize = get("icolumn").parse().unwrap_or(0);
+        if position >= 255 {
+            return Err(crate::Error::Invalid { part: part.to_string(), reason: format!("relationship {name} has column position {position}") });
+        }
         match out.iter_mut().find(|r| r.name == name) {
             Some(r) => {
                 if position >= r.columns.len() {

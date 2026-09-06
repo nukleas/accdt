@@ -1,11 +1,18 @@
 //! Runs against Microsoft's Northwind 2.0 Developer Edition template when present
 //! (`scripts/fetch-fixtures.sh`).
 
-use accdt::{JetType, ObjectKind, Package};
+use accdt::{JetType, ObjectKind, Package, SqlSource, Value};
 
+/// The fixture is required: run `scripts/fetch-fixtures.sh` once.
 fn open() -> Option<Package> {
     let p = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/northwind-2.0-dev.accdt");
-    std::path::Path::new(p).exists().then(|| Package::open(p).unwrap())
+    if !std::path::Path::new(p).exists() {
+        if std::env::var_os("ACCDT_SKIP_FIXTURE_TESTS").is_some() {
+            return None;
+        }
+        panic!("fixture {p} is missing; run scripts/fetch-fixtures.sh (or set ACCDT_SKIP_FIXTURE_TESTS=1)");
+    }
+    Some(Package::open(p).unwrap())
 }
 
 #[test]
@@ -27,21 +34,29 @@ fn object_counts() {
 #[test]
 fn companies_table() {
     let Some(pkg) = open() else { return };
-    let t = pkg.table("Companies").unwrap().unwrap();
+    let t = pkg.table("Companies").unwrap();
     assert_eq!(t.columns[0].name, "CompanyID");
     assert_eq!(t.columns[0].jet_type, JetType::AutoNumber);
     assert_eq!(t.column("CompanyName").unwrap().max_length, Some(50));
     assert_eq!(t.primary_key().unwrap().columns, vec!["CompanyID"]);
     assert_eq!(t.rows.len(), 13);
-    assert_eq!(t.rows[0][1].as_deref(), Some("Adatum Corporation"));
-    let dm = pkg.data_macros(pkg.object(ObjectKind::Table, "Companies").unwrap()).unwrap();
+    assert_eq!(t.rows[0][1].as_ref().and_then(Value::as_str), Some("Adatum Corporation"));
+    let dm = pkg.data_macros("Companies").unwrap();
     assert!(dm.iter().any(|m| m.event == "BeforeChange"));
+    // Attachments are structured, not whitespace.
+    let e = pkg.table("Employees").unwrap();
+    let col = e.columns.iter().position(|c| c.name == "Attachments").unwrap();
+    let photos = e.rows.iter().filter(|r| matches!(r[col], Some(Value::Complex(_)))).count();
+    assert!(photos >= 9, "{photos} employees with attachments");
+    if let Some(Value::Complex(recs)) = &e.rows[0][col] {
+        assert!(recs[0].get("FileName").is_some_and(|n| n.ends_with(".jpg")), "{recs:?}");
+    }
 }
 
 #[test]
 fn login_form_and_queries() {
     let Some(pkg) = open() else { return };
-    let f = pkg.form("frmLogin").unwrap().unwrap();
+    let f = pkg.form("frmLogin").unwrap();
     let ctrls = f.controls();
     let login = ctrls.iter().find(|c| c.name == "cmdLogin").unwrap();
     assert_eq!(login.control_type, "CommandButton");
@@ -49,14 +64,43 @@ fn login_form_and_queries() {
     let filled = f.layout(login);
     assert!(filled.left.is_some() && filled.width.is_some(), "{filled:?}");
     assert!(f.events().iter().any(|e| e.owner == "cmdLogin" && e.event == "Click"));
-    assert!(f.code_behind.as_ref().unwrap().contains("Sub cmdLogin_Click"));
-    assert!(f.control_defaults.contains_key("TextBox"));
+    assert!(f.code_behind().unwrap().contains("Sub cmdLogin_Click"));
+    assert!(f.control_defaults().contains_key("TextBox"));
+    // Wrapped strings are joined and unescaped.
+    let learn = pkg.form("frmLearn").unwrap();
+    let caption = learn.controls().iter().find_map(|c| c.get("Caption").filter(|v| v.starts_with("This form uses the new")).map(String::from)).unwrap();
+    assert!(caption.contains("older versions of Access. For those, please click the button to open an Access report"), "{caption}");
+    assert!(caption.contains("\r\n"), "octal escapes decoded");
+    assert!(learn.document.warnings.is_empty(), "{:?}", learn.document.warnings);
+    let macros = learn.embedded_macros();
+    let open_report = &macros["cmdOpenReport.Click"];
+    assert_eq!(open_report.actions[0].action, "OpenReport");
+    assert_eq!(open_report.actions[0].arguments[0], "rptLearn");
+    assert!(pkg.forms().unwrap().iter().chain(pkg.reports().unwrap().iter()).all(|d| d.document.warnings.is_empty()));
+    // Bare event names.
+    let list = pkg.form("frmEmployeeList").unwrap();
+    assert!(list.events().iter().any(|e| e.event == "AfterUpdate"), "{:?}", list.events());
+
+    // Queries: continuation-safe, alias-aware, stored SQL used.
+    let q = pkg.query("qryPurchaseOrderList").unwrap().to_sql();
+    assert!(q.text.contains("Nz([PurchaseOrders].[TaxAmount])"), "{}", q.text);
+    let q = pkg.query("qryVendorPurchaseOrderList").unwrap().to_sql();
+    assert!(q.complete && q.source == SqlSource::Reconstructed);
+    assert!(q.text.contains("qrycboEmployees AS SumbittedBy ON"), "{}", q.text);
+    assert!(!q.text.contains(", qrycboEmployees"), "no cartesian leftovers: {}", q.text);
+    let q = pkg.query("qrycboProductCategories").unwrap().to_sql();
+    assert_eq!(q.source, SqlSource::Stored);
+    assert!(q.text.contains("UNION ALL") && q.text.contains("\"<All>\""), "{}", q.text);
+    let q = pkg.query("qryOrders_MostRecent").unwrap().to_sql();
+    assert!(q.text.starts_with("SELECT TOP 20"), "{}", q.text);
     let queries = pkg.queries().unwrap();
-    let complete = queries.iter().filter(|q| q.to_sql().1).count();
-    assert!(complete >= 60, "{complete} of {} queries reconstructed", queries.len());
-    let m = &pkg.macros().unwrap()[0];
-    assert_eq!(m.name, "AutoExec");
+    let executable = queries.iter().filter(|q| q.to_sql().is_executable()).count();
+    assert!(executable >= 63, "{executable} of {} queries executable", queries.len());
+    assert!(queries.iter().all(|q| accdt::saveastext::parse(&q.text).warnings.is_empty()));
+
+    let m = pkg.ui_macro("AutoExec").unwrap();
     assert_eq!(m.actions[0].action, "OpenForm");
     assert!(pkg.reports().unwrap().iter().all(|r| !r.controls().is_empty()));
-    assert!(!pkg.resources().is_empty());
+    assert!(!pkg.resources().unwrap().is_empty());
+    assert!(pkg.relationships().unwrap().iter().any(|r| r.enforces_integrity()));
 }

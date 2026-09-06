@@ -38,19 +38,33 @@ fn main() -> ExitCode {
 }
 
 fn kind(s: &str) -> Result<ObjectKind, Box<dyn std::error::Error>> {
-    Ok(match s.to_ascii_lowercase().as_str() {
-        "table" => ObjectKind::Table,
-        "query" => ObjectKind::Query,
-        "form" => ObjectKind::Form,
-        "report" => ObjectKind::Report,
-        "macro" => ObjectKind::Macro,
-        "module" => ObjectKind::Module,
-        other => return Err(format!("unknown kind {other}; use table|query|form|report|macro|module").into()),
-    })
+    Ok(s.parse::<ObjectKind>()?)
 }
 
-fn safe(name: &str) -> String {
-    name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).collect()
+/// File-system safe, collision-free names within one export: a second object that maps to
+/// the same name gets a numeric suffix, and `names.json` records the mapping.
+struct Namer {
+    used: std::collections::HashMap<String, usize>,
+    manifest: std::collections::BTreeMap<String, String>,
+}
+
+impl Namer {
+    fn new() -> Namer {
+        Namer { used: Default::default(), manifest: Default::default() }
+    }
+    fn file(&mut self, dir: &str, object: &str) -> String {
+        let base: String = object.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).collect();
+        let key = format!("{dir}/{}", base.to_lowercase());
+        let n = self.used.entry(key).or_insert(0);
+        *n += 1;
+        let name = if *n == 1 { base } else { format!("{base}~{n}") };
+        self.manifest.insert(format!("{dir}/{name}"), object.to_string());
+        name
+    }
+}
+
+fn design_json(d: &accdt::Design) -> serde_json::Value {
+    serde_json::json!({"name": d.name, "properties": d.properties(), "controls": d.controls(), "events": d.events(), "embedded_macros": d.embedded_macros(), "code_behind": d.code_behind(), "warnings": d.document.warnings})
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -89,32 +103,35 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Cat { package, kind: k, name } => {
             let pkg = Package::open(&package)?;
             let k = kind(&k)?;
-            let o = pkg.object(k, &name).ok_or_else(|| format!("no {} named {name}", k.as_str()))?;
             match k {
-                ObjectKind::Table => print!("{}", pkg.table(&name)?.unwrap().to_csv()),
-                ObjectKind::Query => print!("{}", pkg.queries()?.into_iter().find(|q| q.name.eq_ignore_ascii_case(&name)).unwrap().to_sql().0),
-                _ => print!("{}", pkg.object_text(o)?),
+                ObjectKind::Table => print!("{}", pkg.table(&name)?.to_csv()),
+                ObjectKind::Query => {
+                    let sql = pkg.query(&name)?.to_sql();
+                    if !sql.is_executable() {
+                        eprintln!("accdt: {} has no executable SQL ({:?}); printing the definition", name, sql.source);
+                    }
+                    println!("{}", sql.text);
+                }
+                _ => {
+                    let o = pkg.object(k, &name).ok_or_else(|| format!("no {} named {name}", k.as_str()))?;
+                    print!("{}", pkg.object_text(o)?);
+                }
             }
         }
         Cmd::Json { package, kind: k, name } => {
             let pkg = Package::open(&package)?;
             let k = kind(&k)?;
-            let o = pkg.object(k, &name).ok_or_else(|| format!("no {} named {name}", k.as_str()))?;
             let json = match k {
-                ObjectKind::Table => serde_json::to_string_pretty(&pkg.table(&name)?.unwrap())?,
-                ObjectKind::Query => serde_json::to_string_pretty(&pkg.queries()?.into_iter().find(|q| q.name.eq_ignore_ascii_case(&name)).unwrap())?,
-                ObjectKind::Form => {
-                    let d = pkg.form(&name)?.unwrap();
-                    serde_json::to_string_pretty(&serde_json::json!({"name": d.name, "properties": d.properties, "controls": d.controls(), "events": d.events(), "embedded_macros": d.embedded_macros(), "code_behind": d.code_behind}))?
+                ObjectKind::Table => serde_json::to_string_pretty(&pkg.table(&name)?)?,
+                ObjectKind::Query => {
+                    let q = pkg.query(&name)?;
+                    serde_json::to_string_pretty(&serde_json::json!({"name": q.name, "definition": q.definition, "sql": q.to_sql()}))?
                 }
-                ObjectKind::Report => {
-                    let d = pkg.report(&name)?.unwrap();
-                    serde_json::to_string_pretty(&serde_json::json!({"name": d.name, "properties": d.properties, "controls": d.controls(), "events": d.events(), "embedded_macros": d.embedded_macros(), "code_behind": d.code_behind}))?
-                }
-                ObjectKind::Macro => serde_json::to_string_pretty(&pkg.macros()?.into_iter().find(|m| m.name.eq_ignore_ascii_case(&name)).unwrap())?,
-                ObjectKind::Module => serde_json::to_string_pretty(&pkg.modules()?.into_iter().find(|m| m.name.eq_ignore_ascii_case(&name)).unwrap())?,
+                ObjectKind::Form => serde_json::to_string_pretty(&design_json(&pkg.form(&name)?))?,
+                ObjectKind::Report => serde_json::to_string_pretty(&design_json(&pkg.report(&name)?))?,
+                ObjectKind::Macro => serde_json::to_string_pretty(&pkg.ui_macro(&name)?)?,
+                ObjectKind::Module => serde_json::to_string_pretty(&pkg.module(&name)?)?,
             };
-            let _ = o;
             println!("{json}");
         }
         Cmd::Export { package, dir } => {
@@ -123,36 +140,42 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 std::fs::create_dir_all(dir.join(sub))?;
             }
             let mut n = 0;
+            let mut namer = Namer::new();
             for t in pkg.tables()? {
-                std::fs::write(dir.join("tables").join(format!("{}.csv", safe(&t.name))), t.to_csv())?;
-                std::fs::write(dir.join("tables").join(format!("{}.schema.json", safe(&t.name))), serde_json::to_vec_pretty(&t)?)?;
+                let f = namer.file("tables", &t.name);
+                std::fs::write(dir.join("tables").join(format!("{f}.csv")), t.to_csv())?;
+                std::fs::write(dir.join("tables").join(format!("{f}.schema.json")), serde_json::to_vec_pretty(&t)?)?;
                 n += 1;
             }
             for q in pkg.queries()? {
-                std::fs::write(dir.join("queries").join(format!("{}.sql", safe(&q.name))), q.to_sql().0)?;
-                std::fs::write(dir.join("queries").join(format!("{}.txt", safe(&q.name))), &q.text)?;
+                let f = namer.file("queries", &q.name);
+                std::fs::write(dir.join("queries").join(format!("{f}.sql")), q.to_sql().text)?;
+                std::fs::write(dir.join("queries").join(format!("{f}.txt")), &q.text)?;
                 n += 1;
             }
             for (sub, designs) in [("forms", pkg.forms()?), ("reports", pkg.reports()?)] {
                 for d in designs {
-                    std::fs::write(dir.join(sub).join(format!("{}.txt", safe(&d.name))), &d.text)?;
-                    let json = serde_json::json!({"name": d.name, "properties": d.properties, "controls": d.controls(), "events": d.events(), "embedded_macros": d.embedded_macros()});
-                    std::fs::write(dir.join(sub).join(format!("{}.json", safe(&d.name))), serde_json::to_vec_pretty(&json)?)?;
-                    if let Some(code) = &d.code_behind {
-                        std::fs::write(dir.join(sub).join(format!("{}.bas", safe(&d.name))), code)?;
+                    let f = namer.file(sub, &d.name);
+                    std::fs::write(dir.join(sub).join(format!("{f}.txt")), &d.text)?;
+                    std::fs::write(dir.join(sub).join(format!("{f}.json")), serde_json::to_vec_pretty(&design_json(&d))?)?;
+                    if let Some(code) = d.code_behind() {
+                        std::fs::write(dir.join(sub).join(format!("{f}.bas")), code)?;
                     }
                     n += 1;
                 }
             }
             for m in pkg.macros()? {
-                std::fs::write(dir.join("macros").join(format!("{}.txt", safe(&m.name))), &m.text)?;
-                std::fs::write(dir.join("macros").join(format!("{}.json", safe(&m.name))), serde_json::to_vec_pretty(&m)?)?;
+                let f = namer.file("macros", &m.name);
+                std::fs::write(dir.join("macros").join(format!("{f}.txt")), &m.text)?;
+                std::fs::write(dir.join("macros").join(format!("{f}.json")), serde_json::to_vec_pretty(&m)?)?;
                 n += 1;
             }
             for m in pkg.modules()? {
-                std::fs::write(dir.join("modules").join(format!("{}.bas", safe(&m.name))), &m.source)?;
+                let f = namer.file("modules", &m.name);
+                std::fs::write(dir.join("modules").join(format!("{f}.bas")), &m.source)?;
                 n += 1;
             }
+            std::fs::write(dir.join("names.json"), serde_json::to_vec_pretty(&namer.manifest)?)?;
             std::fs::write(dir.join("relationships.json"), serde_json::to_vec_pretty(&pkg.relationships()?)?)?;
             std::fs::write(dir.join("database-properties.json"), serde_json::to_vec_pretty(&pkg.database_properties()?)?)?;
             std::fs::write(dir.join("vba-references.json"), serde_json::to_vec_pretty(&pkg.vba_references()?)?)?;
