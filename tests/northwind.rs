@@ -89,7 +89,7 @@ fn companies_table() {
 fn login_form_and_queries() {
     let Some(pkg) = open() else { return };
     let f = pkg.form("frmLogin").unwrap();
-    let ctrls = f.controls();
+    let ctrls = f.controls().unwrap();
     let login = ctrls.iter().find(|c| c.name == "cmdLogin").unwrap();
     assert_eq!(login.control_type, "CommandButton");
     assert!(login.layout().left.is_some(), "{:?}", login.layout());
@@ -100,6 +100,7 @@ fn login_form_and_queries() {
     );
     assert!(
         f.events()
+            .unwrap()
             .iter()
             .any(|e| e.owner == "cmdLogin" && e.event == "Click")
     );
@@ -107,8 +108,8 @@ fn login_form_and_queries() {
     assert!(f.control_defaults().contains_key("TextBox"));
     // Wrapped strings are joined and unescaped.
     let learn = pkg.form("frmLearn").unwrap();
-    let caption = learn
-        .controls()
+    let learn_ctrls = learn.controls().unwrap();
+    let caption = learn_ctrls
         .iter()
         .find_map(|c| {
             c.get("Caption")
@@ -128,10 +129,13 @@ fn login_form_and_queries() {
         "{:?}",
         learn.document.warnings
     );
-    let macros = learn.embedded_macros();
+    let macros = learn.embedded_macros().unwrap();
     let open_report = &macros["cmdOpenReport.Click"];
-    assert_eq!(open_report.actions[0].action, "OpenReport");
-    assert_eq!(open_report.actions[0].arguments[0], "rptLearn");
+    let report = open_report.entry().steps.iter().find_map(|s| match s {
+        accdt::Step::Always(accdt::Action::OpenReport { report, .. }) => Some(report.as_str()),
+        _ => None,
+    });
+    assert_eq!(report, Some("rptLearn"));
     assert!(
         pkg.forms()
             .unwrap()
@@ -142,9 +146,12 @@ fn login_form_and_queries() {
     // Bare event names.
     let list = pkg.form("frmEmployeeList").unwrap();
     assert!(
-        list.events().iter().any(|e| e.event == "AfterUpdate"),
-        "{:?}",
         list.events()
+            .unwrap()
+            .iter()
+            .any(|e| e.event == "AfterUpdate"),
+        "{:?}",
+        list.events().unwrap()
     );
 
     // Queries: continuation-safe, alias-aware, stored SQL used.
@@ -192,12 +199,19 @@ fn login_form_and_queries() {
     );
 
     let m = pkg.ui_macro("AutoExec").unwrap();
-    assert_eq!(m.actions[0].action, "OpenForm");
+    assert!(
+        m.entry()
+            .steps
+            .iter()
+            .any(|s| matches!(s, accdt::Step::When { body, .. } if matches!(body.first(), Some(accdt::Action::OpenForm { .. })))),
+        "{:?}",
+        m.entry().steps
+    );
     assert!(
         pkg.reports()
             .unwrap()
             .iter()
-            .all(|r| !r.controls().is_empty())
+            .all(|r| !r.controls().unwrap().is_empty())
     );
     assert!(!pkg.resources().unwrap().is_empty());
     assert!(

@@ -157,13 +157,14 @@ fn reads_every_part() {
     assert_eq!(f.get("Caption"), Some("Main \"window\" for everything"));
     assert_eq!(
         f.controls()
+            .unwrap()
             .iter()
             .map(|c| c.name.clone())
             .collect::<Vec<_>>(),
         vec!["Detail", "cmdGo"]
     );
     assert_eq!(
-        f.events()[0].procedure_name().as_deref(),
+        f.events().unwrap()[0].procedure_name().as_deref(),
         Some("cmdGo_Click")
     );
     assert!(f.code_behind().unwrap().contains("cmdGo_Click"));
@@ -177,7 +178,12 @@ fn reads_every_part() {
         Some("Option Explicit")
     );
     let m = pkg.ui_macro("AutoExec").unwrap();
-    assert_eq!(m.actions[0].arguments, vec!["Main Form"]);
+    match &m.entry().steps[..] {
+        [accdt::Step::Always(accdt::Action::OpenForm { form, .. })] => {
+            assert_eq!(form, "Main Form");
+        }
+        other => panic!("{other:?}"),
+    }
     let q = pkg.query("qryActive").unwrap();
     assert_eq!(q.definition.operation, Some(Operation::Select));
     let sql = q.to_sql();

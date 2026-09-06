@@ -234,12 +234,12 @@ impl Design {
     }
 
     /// Sections and controls in design order, sections first within their subtree.
-    pub fn controls(&self) -> Vec<Control> {
+    pub fn controls(&self) -> crate::Result<Vec<Control>> {
         let mut out = Vec::new();
         for child in self.root().into_iter().flat_map(|r| r.children.iter()) {
-            walk(child, "", None, &mut out);
+            walk(child, "", None, &mut out)?;
         }
-        out
+        Ok(out)
     }
 
     fn owner_name(&self) -> &'static str {
@@ -251,33 +251,33 @@ impl Design {
 
     /// Every event property with a value (`On*`, `AfterUpdate`, `BeforeUpdate`, …), on the
     /// object and its controls.
-    pub fn events(&self) -> Vec<Event> {
+    pub fn events(&self) -> crate::Result<Vec<Event>> {
         let mut out = Vec::new();
         collect_events(self.owner_name(), self.properties(), &mut out);
-        for c in self.controls() {
+        for c in self.controls()? {
             collect_events(&c.name, &c.properties, &mut out);
         }
-        out
+        Ok(out)
     }
 
     /// Embedded macros on the object and its controls, keyed `owner.Event`.
-    pub fn embedded_macros(&self) -> BTreeMap<String, Macro> {
+    pub fn embedded_macros(&self) -> crate::Result<BTreeMap<String, Macro>> {
         let mut out = BTreeMap::new();
         if let Some(root) = self.root() {
-            for (event, m) in embedded_macros_of(root) {
+            for (event, m) in embedded_macros_of(root)? {
                 out.insert(format!("{}.{event}", self.owner_name()), m);
             }
         }
-        for c in self.controls() {
+        for c in self.controls()? {
             for (event, m) in c.embedded_macros {
                 out.insert(format!("{}.{event}", c.name), m);
             }
         }
-        out
+        Ok(out)
     }
 }
 
-fn embedded_macros_of(node: &Node) -> BTreeMap<String, Macro> {
+fn embedded_macros_of(node: &Node) -> crate::Result<BTreeMap<String, Macro>> {
     node.children
         .iter()
         .filter_map(|c| {
@@ -285,7 +285,7 @@ fn embedded_macros_of(node: &Node) -> BTreeMap<String, Macro> {
                 .strip_suffix("EmMacro")
                 .map(|ev| (ev.trim_start_matches("On").to_string(), c))
         })
-        .map(|(event, c)| (event.clone(), Macro::from_node(&event, c)))
+        .map(|(event, c)| Ok((event.clone(), Macro::from_node(&event, c)?)))
         .collect()
 }
 
@@ -307,18 +307,23 @@ fn collect_events(owner: &str, props: &BTreeMap<String, String>, out: &mut Vec<E
     }
 }
 
-fn walk(node: &Node, section: &str, parent: Option<&str>, out: &mut Vec<Control>) {
+fn walk(
+    node: &Node,
+    section: &str,
+    parent: Option<&str>,
+    out: &mut Vec<Control>,
+) -> crate::Result<()> {
     if node.kind == "Block" {
         for child in &node.children {
-            walk(child, section, parent, out);
+            walk(child, section, parent, out)?;
         }
-        return;
+        return Ok(());
     }
     if node.kind.ends_with("EmMacro") {
-        return;
+        return Ok(());
     }
     let Some(name) = node.get("Name").map(String::from) else {
-        return;
+        return Ok(());
     };
     let is_section = SECTION_KINDS.contains(&node.kind.as_str());
     let section_name = if is_section {
@@ -336,11 +341,12 @@ fn walk(node: &Node, section: &str, parent: Option<&str>, out: &mut Vec<Control>
             parent.map(String::from)
         },
         properties: node.properties.clone(),
-        embedded_macros: embedded_macros_of(node),
+        embedded_macros: embedded_macros_of(node)?,
     });
     for child in &node.children {
-        walk(child, &section_name, Some(&name), out);
+        walk(child, &section_name, Some(&name), out)?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -355,7 +361,7 @@ mod tests {
         assert_eq!(d.record_source(), Some("Customers"));
         assert_eq!(d.control_defaults()["Label"]["FontSize"], "11");
         assert_eq!(d.header()["Version"], "21");
-        let ctrls = d.controls();
+        let ctrls = d.controls().unwrap();
         let names: Vec<&str> = ctrls.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(
             names,
@@ -380,7 +386,7 @@ mod tests {
                 height: Some(300)
             }
         );
-        let events = d.events();
+        let events = d.events().unwrap();
         assert!(
             events
                 .iter()
@@ -401,11 +407,13 @@ mod tests {
                 .iter()
                 .any(|e| e.event == "DblClick" && e.value == "[Embedded Macro]")
         );
-        let macros = d.embedded_macros();
-        assert_eq!(
-            macros["cmdSave.DblClick"].actions[0].arguments,
-            vec!["rptX"]
-        );
+        let macros = d.embedded_macros().unwrap();
+        match &macros["cmdSave.DblClick"].entry().steps[..] {
+            [crate::macros::Step::Always(crate::macros::Action::OpenReport { report, .. })] => {
+                assert_eq!(report, "rptX");
+            }
+            other => panic!("{other:?}"),
+        }
         assert!(d.code_behind().unwrap().contains("cmdSave_Click"));
     }
 }

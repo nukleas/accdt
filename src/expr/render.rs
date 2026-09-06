@@ -267,7 +267,7 @@ fn lower_call(expr: &Expr, opts: &RenderOpts, sqlite: bool) -> Option<String> {
             a(1)?,
             a(2)?
         )),
-        "isnull" if args.len() == 1 => Some(format!("{} IS NULL", a(0)?)),
+        "isnull" if args.len() == 1 => Some(format!("({} IS NULL)", a(0)?)),
         "ccur" | "cdbl" | "csng" if args.len() == 1 => Some(format!("CAST({} AS REAL)", a(0)?)),
         "clng" | "cint" | "cbyte" if args.len() == 1 => Some(format!("CAST({} AS INTEGER)", a(0)?)),
         "cstr" | "cvar" if args.len() == 1 => Some(format!("CAST({} AS TEXT)", a(0)?)),
@@ -356,26 +356,27 @@ fn us_date_to_iso(s: &str) -> Option<String> {
 }
 
 pub(crate) fn param_of(expr: &Expr) -> Option<Param> {
-    let parts = match expr {
-        Expr::Bang(p) | Expr::Qualified(p) if p.len() >= 2 => p,
+    let (parts, bang) = match expr {
+        Expr::Bang(p) if p.len() >= 2 => (p, true),
+        Expr::Qualified(p) if p.len() >= 2 => (p, false),
         _ => return None,
     };
     let col = ident_name(&parts[0])?;
     let rest = || join_names(&parts[1..]);
     match col.to_ascii_lowercase().as_str() {
-        "forms" if parts.len() >= 3 => Some(Param::Form {
+        "forms" if bang && parts.len() >= 3 => Some(Param::Form {
             form: ident_name(&parts[1])?,
             control: join_names(&parts[2..])?,
         }),
-        "forms" => Some(Param::Form {
+        "forms" if bang => Some(Param::Form {
             form: ident_name(&parts[1])?,
             control: String::new(),
         }),
-        "tempvars" => Some(Param::TempVar(rest()?)),
-        "parent" => Some(Param::Parent(rest()?)),
+        "tempvars" if bang => Some(Param::TempVar(rest()?)),
+        "parent" if bang => Some(Param::Parent(rest()?)),
         "screen" => Some(Param::Screen(rest()?)),
-        "form" => Some(Param::Control(rest()?)),
-        _ if matches!(expr, Expr::Bang(_)) => Some(Param::Control(
+        "form" if bang => Some(Param::Control(rest()?)),
+        _ if bang => Some(Param::Control(
             parts
                 .iter()
                 .filter_map(ident_name)

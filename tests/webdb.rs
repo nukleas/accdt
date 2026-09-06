@@ -39,7 +39,7 @@ fn wss_tasks_template_links_sharepoint_lists() {
         pkg.forms()
             .unwrap()
             .iter()
-            .all(|f| !f.is_axl() && !f.controls().is_empty())
+            .all(|f| !f.is_axl() && !f.controls().unwrap().is_empty())
     );
 }
 
@@ -69,7 +69,7 @@ fn contacts_web_database_reads_axl_objects() {
     let list = pkg.form("ContactList").unwrap();
     assert!(list.is_axl());
     assert_eq!(list.record_source(), Some("Contacts"));
-    let ctrls = list.controls();
+    let ctrls = list.controls().unwrap();
     assert!(
         ctrls.iter().any(|c| c.name == "txtContactName"
             && c.control_type == "TextBox"
@@ -78,9 +78,14 @@ fn contacts_web_database_reads_axl_objects() {
         ctrls.iter().map(|c| &c.name).collect::<Vec<_>>()
     );
     assert!(ctrls.iter().any(|c| c.name == "Detail" && c.is_section()));
-    let macros = list.embedded_macros();
+    let macros = list.embedded_macros().unwrap();
     assert!(!macros.is_empty(), "UI macros become embedded macros");
-    assert!(list.events().iter().any(|e| e.value == "[Embedded Macro]"));
+    assert!(
+        list.events()
+            .unwrap()
+            .iter()
+            .any(|e| e.value == "[Embedded Macro]")
+    );
     let name_card = pkg.object(ObjectKind::Form, "NameCard").unwrap();
     assert_eq!(name_card.format, PartFormat::Axl);
     assert_eq!(name_card.variations.len(), 2);
@@ -88,6 +93,7 @@ fn contacts_web_database_reads_axl_objects() {
         pkg.form_variation("NameCard", "FlipAddress")
             .unwrap()
             .controls()
+            .unwrap()
             .len()
             > 1
     );
@@ -98,6 +104,7 @@ fn contacts_web_database_reads_axl_objects() {
     assert!(
         report
             .controls()
+            .unwrap()
             .iter()
             .any(|c| c.control_type == "Textbox" || c.is_section())
     );

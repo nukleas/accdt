@@ -103,7 +103,7 @@ fn between_in_is_null() {
 fn iif_isnull_nz_ccur() {
     assert_eq!(
         sqlite("IIf(IsNull([Last Name]),[Company],[Last Name])"),
-        r#"CASE WHEN "Last Name" IS NULL THEN "Company" ELSE "Last Name" END"#
+        r#"CASE WHEN ("Last Name" IS NULL) THEN "Company" ELSE "Last Name" END"#
     );
     assert_eq!(sqlite("Nz([Budget],0)"), r#"COALESCE("Budget", 0)"#);
     assert_eq!(sqlite("Nz([File As])"), r#"COALESCE("File As", '')"#);
@@ -118,7 +118,7 @@ fn nested_iif_employees_extended() {
     let src = r#"IIf(IsNull([Last Name]),IIf(IsNull([First Name]),[Company],[First Name]),IIf(IsNull([First Name]),[Last Name],[Last Name] & ", " & [First Name]))"#;
     assert_eq!(
         sqlite(src),
-        r#"CASE WHEN "Last Name" IS NULL THEN CASE WHEN "First Name" IS NULL THEN "Company" ELSE "First Name" END ELSE CASE WHEN "First Name" IS NULL THEN "Last Name" ELSE "Last Name" || ', ' || "First Name" END END"#
+        r#"CASE WHEN ("Last Name" IS NULL) THEN CASE WHEN ("First Name" IS NULL) THEN "Company" ELSE "First Name" END ELSE CASE WHEN ("First Name" IS NULL) THEN "Last Name" ELSE "Last Name" || ', ' || "First Name" END END"#
     );
 }
 
@@ -263,7 +263,7 @@ fn projects_employees_extended() {
     assert!(sql.complete, "{}", sql.text);
     assert!(
         sql.text.contains(
-            r#"CASE WHEN "Last Name" IS NULL THEN CASE WHEN "First Name" IS NULL THEN "Company" ELSE "First Name" END ELSE CASE WHEN "First Name" IS NULL THEN "Last Name" ELSE "Last Name" || ', ' || "First Name" END END"#
+            r#"CASE WHEN ("Last Name" IS NULL) THEN CASE WHEN ("First Name" IS NULL) THEN "Company" ELSE "First Name" END ELSE CASE WHEN ("First Name" IS NULL) THEN "Last Name" ELSE "Last Name" || ', ' || "First Name" END END"#
         ),
         "{}",
         sql.text
@@ -378,6 +378,7 @@ fn projects_project_details_control_sources() {
     let f = pkg.form("Project Details").unwrap();
     let sqlite_of = |raw: &str| {
         f.controls()
+            .unwrap()
             .iter()
             .find(|c| c.get("ControlSource") == Some(raw))
             .unwrap_or_else(|| panic!("no control with ControlSource {raw}"))
@@ -393,7 +394,7 @@ fn projects_project_details_control_sources() {
     );
     let sub = sqlite_of("=[Tasks subform]![SumOfCost]");
     assert_eq!(sub, ":control_Tasks_subform_SumOfCost");
-    let ctrls = f.controls();
+    let ctrls = f.controls().unwrap();
     let rs = ctrls
         .iter()
         .find_map(|c| {
@@ -413,6 +414,7 @@ fn projects_task_details_default_value() {
     let f = pkg.form("Task Details").unwrap();
     let e = f
         .controls()
+        .unwrap()
         .iter()
         .find_map(|c| {
             c.get("DefaultValue")
@@ -436,6 +438,7 @@ fn projects_employee_phone_list_and_tasks_subreport() {
     let phone = pkg.report("Employee Phone List").unwrap();
     let letter = phone
         .controls()
+        .unwrap()
         .iter()
         .find(|c| c.get("ControlSource") == Some("=UCase(Left(Nz([File As]),1))"))
         .expect("UCase Left File As")
@@ -447,6 +450,7 @@ fn projects_employee_phone_list_and_tasks_subreport() {
     let sub = pkg.report("Tasks Subreport").unwrap();
     let cost = sub
         .controls()
+        .unwrap()
         .iter()
         .find(|c| c.get("ControlSource") == Some("=Nz(Sum([Cost]),0)"))
         .expect("Nz Sum Cost")

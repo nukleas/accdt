@@ -127,7 +127,7 @@ fn attach_macros(view: XmlNode, root: &mut Node) {
             ..Default::default()
         };
         set(&mut em, "Version", "axl");
-        flatten_actions(m, None, &mut em.children);
+        flatten_actions(m, &mut em.children);
         let owner = if target.is_empty() {
             Some(&mut *root)
         } else {
@@ -147,8 +147,9 @@ fn find_control<'a>(node: &'a mut Node, name: &str) -> Option<&'a mut Node> {
     node.children.iter_mut().find_map(|c| find_control(c, name))
 }
 
-/// Actions in document order; an `If`/`Else` condition is carried on each action it guards.
-pub(crate) fn flatten_actions(n: XmlNode, condition: Option<&str>, out: &mut Vec<Node>) {
+/// Actions in document order. `If`/`ElseIf` become nested nodes so [`Macro::from_node`]
+/// can map them to [`Step::When`](crate::macros::Step::When).
+pub(crate) fn flatten_actions(n: XmlNode, out: &mut Vec<Node>) {
     for child in n.children().filter(|c| c.is_element()) {
         match child.tag_name().name() {
             "Action" => {
@@ -156,9 +157,6 @@ pub(crate) fn flatten_actions(n: XmlNode, condition: Option<&str>, out: &mut Vec
                     kind: "Block".into(),
                     ..Default::default()
                 };
-                if let Some(c) = condition {
-                    set(&mut block, "Condition", c);
-                }
                 set(&mut block, "Action", attr(child, "Name").unwrap_or(""));
                 for arg in child
                     .children()
@@ -178,28 +176,39 @@ pub(crate) fn flatten_actions(n: XmlNode, condition: Option<&str>, out: &mut Vec
                 out.push(block);
             }
             "If" | "ElseIf" => {
-                let cond = child
+                let mut block = Node {
+                    kind: child.tag_name().name().into(),
+                    ..Default::default()
+                };
+                if let Some(cond) = child
                     .children()
                     .find(|c| c.is_element() && c.tag_name().name() == "Condition")
                     .and_then(|c| c.text())
-                    .map(str::trim);
-                flatten_actions(child, cond.or(condition), out);
+                    .map(str::trim)
+                {
+                    set(&mut block, "Condition", cond);
+                }
+                flatten_actions(child, &mut block.children);
+                out.push(block);
             }
-            "Else" => flatten_actions(child, Some("Else"), out),
+            "Else" => {
+                let mut block = Node {
+                    kind: "Else".into(),
+                    ..Default::default()
+                };
+                flatten_actions(child, &mut block.children);
+                out.push(block);
+            }
             "Sub" => {
                 let mut block = Node {
                     kind: "Block".into(),
                     ..Default::default()
                 };
-                set(
-                    &mut block,
-                    "Comment",
-                    &format!("Submacro {}", attr(child, "Name").unwrap_or("")),
-                );
+                set(&mut block, "MacroName", attr(child, "Name").unwrap_or(""));
                 out.push(block);
-                flatten_actions(child, condition, out);
+                flatten_actions(child, out);
             }
-            _ => flatten_actions(child, condition, out),
+            _ => flatten_actions(child, out),
         }
     }
 }
@@ -489,25 +498,41 @@ mod tests {
         };
         assert_eq!(d.record_source(), Some("Contacts"));
         assert_eq!(d.get("Caption"), Some("Contact List"));
-        let ctrls = d.controls();
+        let ctrls = d.controls().unwrap();
         let names: Vec<&str> = ctrls.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["Detail", "txtContactName", "cmdSearch"]);
         assert_eq!(ctrls[1].control_type, "TextBox");
         assert_eq!(ctrls[1].section, "Detail");
         assert_eq!(ctrls[1].get("ControlSource"), Some("ContactName"));
-        let events = d.events();
+        let events = d.events().unwrap();
         assert!(
             events.iter().any(|e| e.owner == "cmdSearch"
                 && e.event == "Click"
                 && e.value == "[Embedded Macro]"),
             "{events:?}"
         );
-        let m = &d.embedded_macros()["cmdSearch.Click"];
-        assert_eq!(m.actions[0].action, "SetFilter");
-        assert_eq!(
-            m.actions[0].condition.as_deref(),
-            Some("=txtSearch=\"Search...\"")
-        );
+        let macros = d.embedded_macros().unwrap();
+        let m = &macros["cmdSearch.Click"];
+        match &m.entry().steps[..] {
+            [crate::macros::Step::When { cond, body }] => {
+                assert_eq!(cond.to_sqlite(), r#""txtSearch" = 'Search...'"#);
+                match &body[..] {
+                    [
+                        crate::macros::Action::ApplyFilter {
+                            where_condition: Some(w),
+                            ..
+                        },
+                    ] => {
+                        assert!(
+                            matches!(w, crate::expr::Expr::Call { name, .. } if name == "SQL.Like"),
+                            "{w:?}"
+                        );
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
