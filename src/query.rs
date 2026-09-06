@@ -288,6 +288,13 @@ impl QueryDef {
         let mut q = self.clone();
         for c in &mut q.columns {
             c.expression = f(&c.expression)?;
+            // An update target may be table-qualified in Access (`[T].Col`); SQL dialects
+            // want the bare column in `SET`.
+            if q.operation == Some(Operation::Update)
+                && let Some(t) = c.target.as_mut()
+            {
+                *t = f(last_path_segment(t))?;
+            }
         }
         for j in &mut q.joins {
             j.expression = f(&j.expression)?;
@@ -618,6 +625,19 @@ impl QueryDef {
     }
 }
 
+/// `[Common Tasks].Add` -> `Add`, `[T].[Due Date]` -> `[Due Date]`, `Col` -> `Col`.
+fn last_path_segment(path: &str) -> &str {
+    let p = path.trim();
+    if p.ends_with(']') {
+        match p.rfind('[') {
+            Some(i) => &p[i..],
+            None => p,
+        }
+    } else {
+        p.rsplit('.').next().unwrap_or(p)
+    }
+}
+
 /// Access SQL type name for a DAO type code in a `Parameters` block.
 fn parameter_type(code: &str) -> &'static str {
     match code.trim() {
@@ -818,6 +838,20 @@ mod tests {
             sql.text,
             "UPDATE [Common Tasks]\nSET [Common Tasks].Add = False\nWHERE ((([Common Tasks].Add)=True))\n;"
         );
+    }
+
+    #[test]
+    fn translated_update_uses_bare_set_targets() {
+        let text = "Operation =4\nOption =0\nWhere =\"((([Common Tasks].Add)=True))\"\nBegin InputTables\n    Name =\"Common Tasks\"\nEnd\nBegin OutputColumns\n    Name =\"[Common Tasks].Add\"\n    Expression =\"False\"\n    Name =\"[Common Tasks].[Due Date]\"\n    Expression =\"Null\"\nEnd\n";
+        let sql = Query::parse("q", text.to_string()).to_sqlite().unwrap();
+        assert!(
+            sql.text.contains("SET \"Add\" = 0, \"Due Date\" = NULL"),
+            "{}",
+            sql.text
+        );
+        assert_eq!(last_path_segment("[Common Tasks].Add"), "Add");
+        assert_eq!(last_path_segment("[T].[Due Date]"), "[Due Date]");
+        assert_eq!(last_path_segment("Col"), "Col");
     }
 
     #[test]

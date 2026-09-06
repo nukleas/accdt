@@ -80,7 +80,10 @@ fn project_details_description() {
         .iter()
         .find(|c| c.name == "cmdPrint")
         .unwrap();
-    assert_eq!(print.events[0].actions, ["OpenReport(Project Tasks, view=Report, window=Normal)"]);
+    assert_eq!(
+        print.events[0].actions,
+        ["OpenReport(Project Tasks, view=Report, window=Normal)"]
+    );
     let footer = &d.sections[2];
     let sum = footer
         .controls
