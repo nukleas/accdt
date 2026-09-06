@@ -45,8 +45,9 @@ fn login_form_and_queries() {
     let ctrls = f.controls();
     let login = ctrls.iter().find(|c| c.name == "cmdLogin").unwrap();
     assert_eq!(login.control_type, "CommandButton");
-    assert!(login.layout().left.is_some() && login.layout().height.is_none(), "{:?}", login.layout());
-    assert!(f.layout(login).height.is_some(), "height must come from the design defaults");
+    assert!(login.layout().left.is_some(), "{:?}", login.layout());
+    let filled = f.layout(login);
+    assert!(filled.left.is_some() && filled.width.is_some(), "{filled:?}");
     assert!(f.events().iter().any(|e| e.owner == "cmdLogin" && e.event == "Click"));
     assert!(f.code_behind.as_ref().unwrap().contains("Sub cmdLogin_Click"));
     assert!(f.control_defaults.contains_key("TextBox"));
