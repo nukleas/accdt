@@ -32,6 +32,7 @@ mod database;
 mod datamacro;
 mod design;
 mod error;
+pub mod expr;
 mod macros;
 mod package;
 mod query;
@@ -44,6 +45,9 @@ pub use database::{CoreProperties, Property, Relationship, TemplateInfo, VbaRefe
 pub use datamacro::{DataMacro, DataMacroAction};
 pub use design::{Control, Design, DesignKind, Event, Layout};
 pub use error::{Error, Result};
+pub use expr::{
+    BinaryOp, Expr, Param, RenderOpts, UnaryOp, parse_control_source, parse_expr, parse_ident_path,
+};
 pub use macros::{Macro, MacroAction};
 pub use package::{Module, ObjectEntry, ObjectKind, Package, PartFormat, Resource, Variation};
 pub use query::{Join, Operation, OutputColumn, Query, QueryDef, Sql, SqlSource};
