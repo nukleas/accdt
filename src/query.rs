@@ -39,6 +39,8 @@ impl Operation {
 pub struct OutputColumn {
     pub expression: String,
     pub alias: Option<String>,
+    /// Destination column of an append or update query (`Name` in `OutputColumns`).
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +59,8 @@ pub struct Join {
 pub struct QueryDef {
     pub operation: Option<Operation>,
     pub option: u32,
+    /// Destination table of an append or make-table query (header `Name`).
+    pub target_table: Option<String>,
     /// `(table, alias)`.
     pub tables: Vec<(String, Option<String>)>,
     pub columns: Vec<OutputColumn>,
@@ -139,6 +143,7 @@ impl QueryDef {
         let mut q = QueryDef {
             operation: doc.get("Operation").map(Operation::from_code),
             option: doc.get("Option").and_then(|o| o.parse().ok()).unwrap_or(0),
+            target_table: doc.get("Name").map(String::from),
             where_clause: doc.get("Where").map(String::from),
             having: doc.get("Having").map(String::from),
             ..Default::default()
@@ -156,12 +161,15 @@ impl QueryDef {
             }
         }
         let mut pending_alias = None;
+        let mut pending_target = None;
         for (k, v) in entries("OutputColumns") {
             match k.as_str() {
                 "Alias" => pending_alias = Some(v.clone()),
+                "Name" => pending_target = Some(v.clone()),
                 "Expression" => q.columns.push(OutputColumn {
                     expression: v.clone(),
                     alias: pending_alias.take(),
+                    target: pending_target.take(),
                 }),
                 _ => {}
             }
@@ -224,7 +232,7 @@ impl QueryDef {
         q.properties = doc
             .header_entries
             .iter()
-            .filter(|(k, _)| !matches!(k.as_str(), "Operation" | "Option" | "Where" | "Having"))
+            .filter(|(k, _)| !matches!(k.as_str(), "Operation" | "Option" | "Name" | "Where" | "Having"))
             .cloned()
             .collect();
         q
@@ -252,12 +260,17 @@ impl QueryDef {
                 complete: true,
             };
         }
-        if self.operation != Some(Operation::Select) {
-            return Sql {
-                text: self.skeleton(),
-                source: SqlSource::Skeleton,
-                complete: false,
-            };
+        match self.operation {
+            Some(Operation::Select) | Some(Operation::MakeTable) | Some(Operation::Append) => {}
+            Some(Operation::Update) => return self.update_sql(),
+            Some(Operation::Delete) => return self.delete_sql(),
+            _ => {
+                return Sql {
+                    text: self.skeleton(),
+                    source: SqlSource::Skeleton,
+                    complete: false,
+                }
+            }
         }
         let mut complete = true;
         // A table is referred to by its alias when it has one, otherwise by its name.
@@ -329,14 +342,21 @@ impl QueryDef {
                 None => c.expression.clone(),
             })
             .collect();
-        let mut sql = String::new();
-        if !self.parameters.is_empty() {
-            let params: Vec<String> = self
-                .parameters
+        let mut sql = self.parameters_clause();
+        if self.operation == Some(Operation::Append) {
+            // An append query lists its destination columns by name; a column without a
+            // `Name` is appended positionally, which Access only writes for `SELECT *`.
+            let targets: Vec<String> = self
+                .columns
                 .iter()
-                .map(|(n, t)| format!("{} {}", bracket(n), parameter_type(t)))
+                .filter_map(|c| c.target.as_deref().map(bracket))
                 .collect();
-            sql.push_str(&format!("PARAMETERS {};\n", params.join(", ")));
+            let target = self.target_table.as_deref().unwrap_or_default();
+            if targets.is_empty() {
+                sql.push_str(&format!("INSERT INTO {}\n", bracket(target)));
+            } else {
+                sql.push_str(&format!("INSERT INTO {} ({})\n", bracket(target), targets.join(", ")));
+            }
         }
         sql.push_str(&format!(
             "SELECT {}{}\n",
@@ -351,6 +371,12 @@ impl QueryDef {
                 columns.join(", ")
             }
         ));
+        if self.operation == Some(Operation::MakeTable) {
+            sql.push_str(&format!(
+                "INTO {}\n",
+                bracket(self.target_table.as_deref().unwrap_or_default())
+            ));
+        }
         if !from_parts.is_empty() {
             sql.push_str(&format!("FROM {}\n", from_parts.join(", ")));
         }
@@ -379,6 +405,108 @@ impl QueryDef {
         }
     }
 
+    fn parameters_clause(&self) -> String {
+        if self.parameters.is_empty() {
+            return String::new();
+        }
+        let params: Vec<String> = self
+            .parameters
+            .iter()
+            .map(|(n, t)| format!("{} {}", bracket(n), parameter_type(t)))
+            .collect();
+        format!("PARAMETERS {};\n", params.join(", "))
+    }
+
+    fn table_list(&self) -> String {
+        self.tables
+            .iter()
+            .map(|(n, a)| match a {
+                Some(a) => format!("{} AS {}", bracket(n), bracket(a)),
+                None => bracket(n),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// `UPDATE t SET col = expr, ... WHERE ...`; joins are written as in Access's own SQL
+    /// view (`UPDATE a INNER JOIN b ON ... SET ...`).
+    fn update_sql(&self) -> Sql {
+        let sets: Vec<String> = self
+            .columns
+            .iter()
+            .map(|c| match &c.target {
+                Some(t) => format!("{} = {}", t, c.expression),
+                None => c.expression.clone(),
+            })
+            .collect();
+        let mut sql = self.parameters_clause();
+        sql.push_str(&format!("UPDATE {}\n", self.joined_tables()));
+        sql.push_str(&format!("SET {}\n", sets.join(", ")));
+        if let Some(w) = &self.where_clause {
+            sql.push_str(&format!("WHERE {w}\n"));
+        }
+        sql.push(';');
+        Sql {
+            text: sql,
+            source: SqlSource::Reconstructed,
+            complete: !sets.is_empty(),
+        }
+    }
+
+    /// `DELETE [t.*] FROM ... WHERE ...`.
+    fn delete_sql(&self) -> Sql {
+        let mut sql = self.parameters_clause();
+        let what: Vec<String> = self.columns.iter().map(|c| c.expression.clone()).collect();
+        if what.is_empty() {
+            sql.push_str("DELETE\n");
+        } else {
+            sql.push_str(&format!("DELETE {}\n", what.join(", ")));
+        }
+        sql.push_str(&format!("FROM {}\n", self.joined_tables()));
+        if let Some(w) = &self.where_clause {
+            sql.push_str(&format!("WHERE {w}\n"));
+        }
+        sql.push(';');
+        Sql {
+            text: sql,
+            source: SqlSource::Reconstructed,
+            complete: true,
+        }
+    }
+
+    /// Tables with their joins in definition order, for update and delete queries.
+    fn joined_tables(&self) -> String {
+        if self.joins.is_empty() {
+            return self.table_list();
+        }
+        let key_of = |t: &(String, Option<String>)| t.1.clone().unwrap_or_else(|| t.0.clone());
+        let table_ref = |key: &str| match self.tables.iter().find(|t| key_of(t) == key) {
+            Some((n, Some(a))) => format!("{} AS {}", bracket(n), bracket(a)),
+            Some((n, None)) => bracket(n),
+            None => bracket(key),
+        };
+        let mut out = String::new();
+        let mut used: Vec<String> = Vec::new();
+        for j in &self.joins {
+            let word = match j.flag {
+                2 => "LEFT JOIN",
+                3 => "RIGHT JOIN",
+                _ => "INNER JOIN",
+            };
+            if out.is_empty() {
+                out = format!("{} {} {} ON {}", table_ref(&j.left_table), word, table_ref(&j.right_table), j.expression);
+                used.push(j.left_table.clone());
+            } else {
+                out = format!("({out}) {} {} ON {}", word, table_ref(&j.right_table), j.expression);
+            }
+            used.push(j.right_table.clone());
+        }
+        for t in self.tables.iter().filter(|t| !used.contains(&key_of(t))) {
+            out.push_str(&format!(", {}", table_ref(&key_of(t))));
+        }
+        out
+    }
+
     fn skeleton(&self) -> String {
         let mut sql = format!(
             "-- {:?} query: no stored SQL and not a select; definition follows for manual rewriting\n",
@@ -390,9 +518,13 @@ impl QueryDef {
                 a.as_ref().map(|a| format!(" AS {a}")).unwrap_or_default()
             ));
         }
+        if let Some(t) = &self.target_table {
+            sql.push_str(&format!("-- into: {t}\n"));
+        }
         for c in &self.columns {
             sql.push_str(&format!(
-                "-- column: {}{}\n",
+                "-- column: {}{}{}\n",
+                c.target.as_ref().map(|t| format!("{t} = ")).unwrap_or_default(),
                 c.expression,
                 c.alias
                     .as_ref()
@@ -568,14 +700,56 @@ mod tests {
     }
 
     #[test]
-    fn non_select_without_sql_is_a_skeleton() {
+    fn append_query_lists_destination_columns() {
+        let text = "Operation =3\nName =\"Tasks\"\nOption =0\nWhere =\"((([Common Tasks].Add)=True))\"\nBegin InputTables\n    Name =\"Common Tasks\"\nEnd\nBegin OutputColumns\n    Name =\"Title\"\n    Expression =\"[Common Tasks].Title\"\n    Alias =\"Expr1\"\n    Name =\"Project\"\n    Expression =\"Forms![Project Details]!ID\"\nEnd\n";
+        let q = Query::parse("q", text.to_string());
+        assert_eq!(q.definition.operation, Some(Operation::Append));
+        assert_eq!(q.definition.target_table.as_deref(), Some("Tasks"));
+        let sql = q.to_sql();
+        assert!(sql.is_executable(), "{}", sql.text);
+        assert_eq!(
+            sql.text,
+            "INSERT INTO Tasks (Title, Project)\nSELECT [Common Tasks].Title, Forms![Project Details]!ID AS Expr1\nFROM [Common Tasks]\nWHERE ((([Common Tasks].Add)=True))\n;"
+        );
+    }
+
+    #[test]
+    fn update_query_sets_columns() {
+        let text = "Operation =4\nOption =0\nWhere =\"((([Common Tasks].Add)=True))\"\nBegin InputTables\n    Name =\"Common Tasks\"\nEnd\nBegin OutputColumns\n    Name =\"[Common Tasks].Add\"\n    Expression =\"False\"\nEnd\n";
+        let sql = Query::parse("q", text.to_string()).to_sql();
+        assert!(sql.is_executable(), "{}", sql.text);
+        assert_eq!(
+            sql.text,
+            "UPDATE [Common Tasks]\nSET [Common Tasks].Add = False\nWHERE ((([Common Tasks].Add)=True))\n;"
+        );
+    }
+
+    #[test]
+    fn delete_and_make_table_queries() {
+        let del = Query::parse(
+            "q",
+            "Operation =5\nOption =0\nWhere =\"(((T.Done)=True))\"\nBegin InputTables\n    Name =\"T\"\nEnd\nBegin OutputColumns\n    Expression =\"T.*\"\nEnd\n".to_string(),
+        )
+        .to_sql();
+        assert_eq!(del.text, "DELETE T.*\nFROM T\nWHERE (((T.Done)=True))\n;");
+        let mk = Query::parse(
+            "q",
+            "Operation =2\nName =\"Archive\"\nOption =0\nBegin InputTables\n    Name =\"T\"\nEnd\nBegin OutputColumns\n    Expression =\"T.*\"\nEnd\n".to_string(),
+        )
+        .to_sql();
+        assert_eq!(mk.text, "SELECT T.*\nINTO Archive\nFROM T\n;");
+        assert!(del.is_executable() && mk.is_executable());
+    }
+
+    #[test]
+    fn unknown_operation_without_sql_is_a_skeleton() {
         let q = Query::parse(
             "q",
-            "Operation =5\nBegin InputTables\n    Name =\"T\"\nEnd\n".to_string(),
+            "Operation =6\nBegin InputTables\n    Name =\"T\"\nEnd\n".to_string(),
         );
         let sql = q.to_sql();
         assert_eq!(sql.source, SqlSource::Skeleton);
         assert!(!sql.is_executable());
-        assert!(sql.text.starts_with("-- Delete query"));
+        assert!(sql.text.starts_with("-- Crosstab query"));
     }
 }

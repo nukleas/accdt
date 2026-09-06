@@ -180,9 +180,12 @@ impl Table {
             .map(|(_, _, v)| v.as_str())
     }
 
-    /// True for a SharePoint list link; its rows live on the server, not in the template.
+    /// True for a SharePoint list link whose rows live on the server. A table that carries
+    /// `WSS*` properties *and* a data part is local data that Access can publish to a list
+    /// of that template id when the database is created on a site (the 2007 desktop
+    /// templates ship this way); it is not linked.
     pub fn is_linked(&self) -> bool {
-        self.sharepoint.is_some()
+        self.sharepoint.is_some() && !self.has_data_part
     }
 
     /// Column by name, case-insensitively (Access names are case-insensitive).

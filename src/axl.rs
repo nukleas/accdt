@@ -363,6 +363,7 @@ pub(crate) fn query_def(part: &str, xml: &str) -> crate::Result<QueryDef> {
             def.columns.push(OutputColumn {
                 expression,
                 alias: attr(p, "Alias").map(String::from),
+                target: None,
             });
         }
     }
