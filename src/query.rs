@@ -273,7 +273,7 @@ impl QueryDef {
             .to_sql())
     }
 
-    /// [`to_sql_translated`] with [`Expr::to_sqlite`](crate::expr::Expr::to_sqlite). Drops the
+    /// [`Self::to_sql_translated`] with [`Expr::to_sqlite`](crate::expr::Expr::to_sqlite). Drops the
     /// Access `PARAMETERS` clause, which SQLite does not accept.
     pub fn to_sqlite(&self) -> crate::Result<Sql> {
         let mut sql = self.to_sql_translated(&|e| e.to_sqlite())?;
