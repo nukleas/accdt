@@ -41,6 +41,21 @@ pub fn parse_control_source(input: &str) -> Result<Expr> {
     }
 }
 
+/// `DefaultValue` slot: literals, `=expr`, or a bang/dot path.
+pub fn parse_default_value(input: &str) -> Result<Expr> {
+    let s = input.trim();
+    if s.starts_with('=') {
+        parse_expr(s)
+    } else {
+        parse_expr(s).or_else(|_| parse_ident_path(s))
+    }
+}
+
+/// `Filters.[Filter String]` (an Access WHERE fragment).
+pub fn parse_filter_string(input: &str) -> Result<Expr> {
+    parse_expr(input)
+}
+
 fn strip_leading_eq(s: &str) -> &str {
     s.strip_prefix('=').map(str::trim_start).unwrap_or(s)
 }

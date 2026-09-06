@@ -6,7 +6,9 @@ mod render;
 
 use crate::error::Error;
 
-pub use parser::{parse_control_source, parse_expr, parse_ident_path};
+pub use parser::{
+    parse_control_source, parse_default_value, parse_expr, parse_filter_string, parse_ident_path,
+};
 pub use render::{RenderOpts, access_like_to_sql};
 
 /// A parsed Access expression.

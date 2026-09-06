@@ -1,6 +1,9 @@
-//! Lexer / Pratt / SQLite renderer: one case per Access quirk.
+//! Lexer / Pratt / SQLite renderer: one case per Access quirk, plus Projects goldens.
 
-use accdt::expr::{Expr, Param, parse_control_source, parse_expr, parse_ident_path};
+use accdt::expr::{
+    Expr, Param, parse_control_source, parse_expr, parse_filter_string, parse_ident_path,
+};
+use accdt::{Package, SqlSource, Value};
 
 fn sqlite(s: &str) -> String {
     parse_expr(s)
@@ -229,4 +232,266 @@ fn replace_and_date_time() {
     );
     assert_eq!(sqlite("Date()"), "date('now')");
     assert_eq!(sqlite("Time()"), "time('now')");
+}
+
+fn open_fixture(name: &str) -> Option<Package> {
+    let p = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+    if !std::path::Path::new(&p).exists() {
+        if std::env::var_os("ACCDT_SKIP_FIXTURE_TESTS").is_some() {
+            return None;
+        }
+        panic!(
+            "fixture {p} is missing; run scripts/fetch-fixtures.sh (or set ACCDT_SKIP_FIXTURE_TESTS=1)"
+        );
+    }
+    Some(Package::open(&p).unwrap())
+}
+
+fn projects() -> Option<Package> {
+    open_fixture("project-management.accdt")
+}
+
+#[test]
+fn projects_employees_extended() {
+    let Some(pkg) = projects() else { return };
+    let sql = pkg
+        .query("Employees Extended")
+        .unwrap()
+        .to_sqlite()
+        .unwrap();
+    assert_eq!(sql.source, SqlSource::Reconstructed);
+    assert!(sql.complete, "{}", sql.text);
+    assert!(
+        sql.text.contains(
+            r#"CASE WHEN "Last Name" IS NULL THEN CASE WHEN "First Name" IS NULL THEN "Company" ELSE "First Name" END ELSE CASE WHEN "First Name" IS NULL THEN "Last Name" ELSE "Last Name" || ', ' || "First Name" END END"#
+        ),
+        "{}",
+        sql.text
+    );
+    assert!(
+        sql.text.contains(r#""First Name" || ' ' || "Last Name""#),
+        "{}",
+        sql.text
+    );
+    assert!(sql.text.contains("ORDER BY"), "{}", sql.text);
+    assert!(sql.text.contains(r#""Employees".*"#), "{}", sql.text);
+}
+
+#[test]
+fn projects_project_totals() {
+    let Some(pkg) = projects() else { return };
+    let sql = pkg.query("Project Totals").unwrap().to_sqlite().unwrap();
+    assert!(
+        sql.text
+            .contains(r#"CAST(COALESCE(SUM("Tasks"."Cost"), 0) AS REAL)"#),
+        "{}",
+        sql.text
+    );
+    assert!(
+        sql.text
+            .contains(r#"CAST(COALESCE(SUM("Tasks"."Cost In Days"), 0) AS REAL)"#),
+        "{}",
+        sql.text
+    );
+}
+
+#[test]
+fn projects_common_tasks_append_and_update() {
+    let Some(pkg) = projects() else { return };
+    let ins = pkg
+        .query("Common Tasks Append")
+        .unwrap()
+        .to_sqlite()
+        .unwrap();
+    assert!(
+        ins.text.contains(":forms_Project_Details_ID"),
+        "{}",
+        ins.text
+    );
+    assert!(
+        ins.text.contains(r#""Common Tasks"."Add" = 1"#),
+        "{}",
+        ins.text
+    );
+    let upd = pkg
+        .query("Common Tasks Update Add Field")
+        .unwrap()
+        .to_sqlite()
+        .unwrap();
+    assert!(upd.text.contains("= 0"), "{}", upd.text);
+    assert!(
+        upd.text.contains(r#""Common Tasks"."Add" = 1"#),
+        "{}",
+        upd.text
+    );
+}
+
+#[test]
+fn projects_open_and_completed_queries() {
+    let Some(pkg) = projects() else { return };
+    let open = pkg.query("Open Projects").unwrap().to_sqlite().unwrap();
+    assert!(open.text.contains("'Completed'"), "{}", open.text);
+    assert!(open.text.contains("'Deferred'"), "{}", open.text);
+    assert!(!open.text.contains("\"Completed\""), "{}", open.text);
+    assert!(open.text.contains(r#""End Date""#), "{}", open.text);
+    let done = pkg
+        .query("Completed and Deferred Projects")
+        .unwrap()
+        .to_sqlite()
+        .unwrap();
+    assert!(done.text.contains("'Completed'"), "{}", done.text);
+    assert!(done.text.contains("'Deferred'"), "{}", done.text);
+    let tasks = pkg.query("Open Tasks").unwrap().to_sqlite().unwrap();
+    assert!(
+        tasks.text.contains(r#""Tasks"."Status" <> 'Completed'"#),
+        "{}",
+        tasks.text
+    );
+}
+
+#[test]
+fn projects_filters_rows() {
+    let Some(pkg) = projects() else { return };
+    let t = pkg.table("Filters").unwrap();
+    let col = t
+        .columns
+        .iter()
+        .position(|c| c.name == "Filter String")
+        .expect("Filter String");
+    let strings: Vec<&str> = t
+        .rows
+        .iter()
+        .filter_map(|r| r[col].as_ref().and_then(Value::as_str))
+        .collect();
+    assert!(strings.len() >= 3, "{strings:?}");
+    let s0 = parse_filter_string(strings[0]).unwrap().to_sqlite();
+    let s1 = parse_filter_string(strings[1]).unwrap().to_sqlite();
+    let s2 = parse_filter_string(strings[2]).unwrap().to_sqlite();
+    assert_eq!(s0, r#""Open Projects"."Status" = 'In Progress'"#);
+    assert_eq!(s1, r#""Open Projects"."Status" = 'Not Started'"#);
+    assert_eq!(s2, r#""Open Projects"."Priority" = '(1) High'"#);
+}
+
+#[test]
+fn projects_project_details_control_sources() {
+    let Some(pkg) = projects() else { return };
+    let f = pkg.form("Project Details").unwrap();
+    let sqlite_of = |raw: &str| {
+        f.controls()
+            .iter()
+            .find(|c| c.get("ControlSource") == Some(raw))
+            .unwrap_or_else(|| panic!("no control with ControlSource {raw}"))
+            .control_source_expr()
+            .unwrap()
+            .unwrap()
+            .to_sqlite()
+    };
+    assert_eq!(sqlite_of("=Nz([Budget],0)"), r#"COALESCE("Budget", 0)"#);
+    assert_eq!(
+        sqlite_of("=[Budget]-[SumTaskCost]"),
+        r#""Budget" - "SumTaskCost""#
+    );
+    let sub = sqlite_of("=[Tasks subform]![SumOfCost]");
+    assert_eq!(sub, ":control_Tasks_subform_SumOfCost");
+    let ctrls = f.controls();
+    let rs = ctrls
+        .iter()
+        .find_map(|c| {
+            c.get("RowSource")
+                .filter(|s| s.contains("Open Projects") && s.contains("Form![ID]"))
+        })
+        .expect("Open Projects RowSource");
+    let where_e = parse_expr("[ID]<>Nz(Form![ID],0)").unwrap();
+    assert!(rs.contains("[ID]<>Nz(Form![ID],0)"), "{rs}");
+    assert_eq!(where_e.to_sqlite(), r#""ID" <> COALESCE(:control_ID, 0)"#);
+    assert_eq!(where_e.parameters(), vec![Param::Control("ID".into())]);
+}
+
+#[test]
+fn projects_task_details_default_value() {
+    let Some(pkg) = projects() else { return };
+    let f = pkg.form("Task Details").unwrap();
+    let e = f
+        .controls()
+        .iter()
+        .find_map(|c| {
+            c.get("DefaultValue")
+                .filter(|v| v.contains("Project Details"))
+                .map(|_| c.default_value_expr().unwrap().unwrap())
+        })
+        .expect("DefaultValue Forms!Project Details");
+    assert_eq!(e.to_sqlite(), ":forms_Project_Details_ID");
+    assert_eq!(
+        e.parameters(),
+        vec![Param::Form {
+            form: "Project Details".into(),
+            control: "ID".into(),
+        }]
+    );
+}
+
+#[test]
+fn projects_employee_phone_list_and_tasks_subreport() {
+    let Some(pkg) = projects() else { return };
+    let phone = pkg.report("Employee Phone List").unwrap();
+    let letter = phone
+        .controls()
+        .iter()
+        .find(|c| c.get("ControlSource") == Some("=UCase(Left(Nz([File As]),1))"))
+        .expect("UCase Left File As")
+        .control_source_expr()
+        .unwrap()
+        .unwrap()
+        .to_sqlite();
+    assert_eq!(letter, r#"upper(substr(COALESCE("File As", ''), 1, 1))"#);
+    let sub = pkg.report("Tasks Subreport").unwrap();
+    let cost = sub
+        .controls()
+        .iter()
+        .find(|c| c.get("ControlSource") == Some("=Nz(Sum([Cost]),0)"))
+        .expect("Nz Sum Cost")
+        .control_source_expr()
+        .unwrap()
+        .unwrap()
+        .to_sqlite();
+    assert_eq!(cost, r#"COALESCE(SUM("Cost"), 0)"#);
+}
+
+#[test]
+fn marketing_queries_translate() {
+    let Some(pkg) = open_fixture("marketing-projects.accdt") else {
+        return;
+    };
+    for q in pkg.queries().unwrap() {
+        let access = q.to_sql();
+        if access.source != SqlSource::Reconstructed {
+            continue;
+        }
+        let sql = q.to_sqlite().unwrap_or_else(|e| panic!("{}: {e}", q.name));
+        assert_eq!(sql.source, SqlSource::Reconstructed);
+        assert!(
+            sql.text.starts_with("SELECT")
+                || sql.text.starts_with("INSERT")
+                || sql.text.starts_with("UPDATE")
+                || sql.text.starts_with("DELETE"),
+            "{}: {}",
+            q.name,
+            sql.text
+        );
+    }
+}
+
+#[test]
+fn northwind_stored_sql_is_not_translated() {
+    let Some(pkg) = open_fixture("northwind-2.0-dev.accdt") else {
+        return;
+    };
+    let q = pkg.query("qrycboProductCategories").unwrap();
+    let sql = q.to_sqlite().unwrap();
+    assert_eq!(sql.source, SqlSource::Stored);
+    assert!(
+        sql.text.contains("UNION ALL") && sql.text.contains("\"<All>\""),
+        "{}",
+        sql.text
+    );
 }

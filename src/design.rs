@@ -66,6 +66,22 @@ impl Control {
     pub fn is_section(&self) -> bool {
         SECTION_KINDS.contains(&self.control_type.as_str())
     }
+
+    /// `ControlSource`: an `=` expression, or a field / bang path.
+    pub fn control_source_expr(&self) -> crate::Result<Option<crate::expr::Expr>> {
+        match self.get("ControlSource") {
+            None | Some("") => Ok(None),
+            Some(s) => crate::expr::parse_control_source(s).map(Some),
+        }
+    }
+
+    /// `DefaultValue`: Access expression (optional leading `=`).
+    pub fn default_value_expr(&self) -> crate::Result<Option<crate::expr::Expr>> {
+        match self.get("DefaultValue") {
+            None | Some("") => Ok(None),
+            Some(s) => crate::expr::parse_default_value(s).map(Some),
+        }
+    }
     /// Layout in twips (1440 per inch) as written on the control. SaveAsText omits values
     /// equal to the design's per-type defaults; use [`Design::layout`] to fill those in.
     pub fn layout(&self) -> Layout {

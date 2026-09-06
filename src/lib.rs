@@ -46,7 +46,8 @@ pub use datamacro::{DataMacro, DataMacroAction};
 pub use design::{Control, Design, DesignKind, Event, Layout};
 pub use error::{Error, Result};
 pub use expr::{
-    BinaryOp, Expr, Param, RenderOpts, UnaryOp, parse_control_source, parse_expr, parse_ident_path,
+    BinaryOp, Expr, Param, RenderOpts, UnaryOp, parse_control_source, parse_default_value,
+    parse_expr, parse_filter_string, parse_ident_path,
 };
 pub use macros::{Macro, MacroAction};
 pub use package::{Module, ObjectEntry, ObjectKind, Package, PartFormat, Resource, Variation};
