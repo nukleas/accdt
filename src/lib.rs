@@ -55,3 +55,9 @@ pub use design::{
 };
 
 pub use design::NodeId;
+
+pub use design::{
+    BoundColumn, ColumnWidth, EmbeddedSource, GroupKeepTogether, GroupLevel, GroupOn, LinkField,
+    Lookup, RecordSource, RowSource, SortDirection, SubformLink, ValueList,
+};
+pub use package::{ResolvedObject, ResolvedRecordSource};

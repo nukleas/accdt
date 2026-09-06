@@ -68,7 +68,7 @@ fn contacts_web_database_reads_axl_objects() {
     // AXL forms flow through the same Design views.
     let list = pkg.form("ContactList").unwrap();
     assert!(list.is_axl());
-    assert_eq!(list.record_source(), Some("Contacts"));
+    assert_eq!(list.record_source(), accdt::RecordSource::Named("Contacts"));
     let ctrls = list.controls();
     assert!(
         ctrls.iter().any(|c| c.name() == "txtContactName"
@@ -94,7 +94,10 @@ fn contacts_web_database_reads_axl_objects() {
 
     // AXL reports and queries.
     let report = pkg.report("Comments").unwrap();
-    assert_eq!(report.record_source(), Some("Comments"));
+    assert_eq!(
+        report.record_source(),
+        accdt::RecordSource::Named("Comments")
+    );
     assert!(
         report
             .controls()

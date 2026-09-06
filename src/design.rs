@@ -629,8 +629,8 @@ impl Design {
         self.properties().get(key).map(String::as_str)
     }
 
-    pub fn record_source(&self) -> Option<&str> {
-        self.get("RecordSource")
+    pub fn record_source(&self) -> RecordSource<'_> {
+        RecordSource::classify(self.get("RecordSource").unwrap_or(""))
     }
 
     /// VBA source of the code-behind module, if the object has one.
@@ -851,7 +851,7 @@ mod tests {
     #[test]
     fn controls_events_and_code() {
         let d = Design::parse("frmCustomers", DesignKind::Form, FORM.to_string());
-        assert_eq!(d.record_source(), Some("Customers"));
+        assert_eq!(d.record_source(), RecordSource::Named("Customers"));
         assert_eq!(d.control_defaults()["Label"]["FontSize"], "11");
         assert_eq!(d.header()["Version"], "21");
         let ctrls = d.controls();
@@ -896,5 +896,494 @@ mod tests {
             vec!["rptX"]
         );
         assert!(d.code_behind().unwrap().contains("cmdSave_Click"));
+    }
+}
+
+/// Saved source classification only; SQL is not evaluated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum RecordSource<'a> {
+    Unbound,
+    Named(&'a str),
+    Sql(&'a str),
+}
+impl<'a> RecordSource<'a> {
+    pub fn classify(source: &'a str) -> Self {
+        if source.trim().is_empty() {
+            Self::Unbound
+        } else if looks_like_sql(source) {
+            Self::Sql(source)
+        } else {
+            Self::Named(source)
+        }
+    }
+    pub fn raw(self) -> &'a str {
+        match self {
+            Self::Unbound => "",
+            Self::Named(s) | Self::Sql(s) => s,
+        }
+    }
+}
+/// Lexical first-token recognition, deliberately not an SQL parser.
+fn looks_like_sql(source: &str) -> bool {
+    let token = source
+        .trim_start()
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .next()
+        .unwrap_or("");
+    matches!(
+        token.to_ascii_uppercase().as_str(),
+        "SELECT" | "TRANSFORM" | "PARAMETERS" | "TABLE"
+    )
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum RowSource<'a> {
+    Empty,
+    Values(ValueList),
+    Sql(&'a str),
+    Named(&'a str),
+    FieldList(&'a str),
+    Callback { function: &'a str, source: &'a str },
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct ValueList {
+    pub rows: Vec<Vec<String>>,
+    pub headers: Option<Vec<String>>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct Lookup<'a> {
+    pub source: RowSource<'a>,
+    pub column_count: usize,
+    pub widths: Vec<ColumnWidth>,
+    pub bound: BoundColumn,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum BoundColumn {
+    RowIndex,
+    Column(usize),
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum ColumnWidth {
+    Auto,
+    Twips(i64),
+    Unrecognized(String),
+}
+impl Lookup<'_> {
+    pub fn display_column(&self) -> Option<usize> {
+        self.widths
+            .iter()
+            .position(|w| !matches!(w, ColumnWidth::Twips(0)))
+    }
+}
+
+/// A trailing semicolon denotes a final empty item. Quotes use doubled quote escapes.
+fn value_tokens(raw: &str) -> Result<Vec<String>, &'static str> {
+    let mut out = Vec::new();
+    let mut chars = raw.chars().peekable();
+    loop {
+        while chars.peek().is_some_and(|c| c.is_whitespace()) {
+            chars.next();
+        }
+        let mut value = String::new();
+        if chars.peek() == Some(&'"') {
+            chars.next();
+            loop {
+                match chars.next() {
+                    Some('"') if chars.peek() == Some(&'"') => {
+                        chars.next();
+                        value.push('"');
+                    }
+                    Some('"') => break,
+                    Some(c) => value.push(c),
+                    None => return Err("unterminated value-list quote"),
+                }
+            }
+            while chars.peek().is_some_and(|c| c.is_whitespace()) {
+                chars.next();
+            }
+            if chars.peek().is_some_and(|c| *c != ';') {
+                return Err("characters after closing value-list quote");
+            }
+        } else {
+            while chars.peek().is_some_and(|c| *c != ';') {
+                let c = chars.next().unwrap();
+                if c == '"' {
+                    return Err("quote inside unquoted value-list item");
+                }
+                value.push(c);
+            }
+            value = value.trim().to_string();
+        }
+        out.push(value);
+        if chars.next().is_none() {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+pub(crate) fn lookup<'a>(
+    design: &str,
+    node: &str,
+    axl: bool,
+    get: impl Fn(&str) -> Option<&'a str>,
+) -> Result<Lookup<'a>, PropertyError> {
+    let error = |key: &str, reason: &str| {
+        PropertyError::new(design, node, key, get(key).unwrap_or(""), reason)
+    };
+    let count = get("ColumnCount")
+        .unwrap_or("1")
+        .parse::<usize>()
+        .map_err(|_| error("ColumnCount", "expected positive column count"))?;
+    if count == 0 || count > 255 {
+        return Err(error("ColumnCount", "column count outside 1..=255"));
+    }
+    let bound = get("BoundColumn")
+        .unwrap_or("1")
+        .parse::<usize>()
+        .map_err(|_| error("BoundColumn", "expected 0 or 1-based column index"))?;
+    if bound > count {
+        return Err(error("BoundColumn", "bound column exceeds column count"));
+    }
+    let mut widths = Vec::new();
+    if let Some(raw) = get("ColumnWidths").filter(|r| !r.is_empty()) {
+        for width in raw.split(';') {
+            let width = width.trim();
+            widths.push(if width.is_empty() {
+                ColumnWidth::Auto
+            } else if axl {
+                ColumnWidth::Unrecognized(width.into())
+            } else {
+                match width.parse::<i64>() {
+                    Ok(n) if n >= 0 => ColumnWidth::Twips(n),
+                    _ => ColumnWidth::Unrecognized(width.into()),
+                }
+            });
+        }
+    }
+    if widths.len() > count {
+        return Err(error("ColumnWidths", "more widths than columns"));
+    }
+    widths.resize(count, ColumnWidth::Auto);
+    let raw = get("RowSource").unwrap_or("");
+    let source_type = get("RowSourceType").unwrap_or("Table/Query");
+    let source = if raw.is_empty()
+        && matches!(
+            source_type.to_ascii_lowercase().as_str(),
+            "table/query" | "value list"
+        ) {
+        RowSource::Empty
+    } else {
+        match source_type.to_ascii_lowercase().as_str() {
+            "value list" => {
+                let tokens = value_tokens(raw).map_err(|reason| error("RowSource", reason))?;
+                if tokens.len() % count != 0 {
+                    return Err(error("RowSource", "incomplete multi-column value-list row"));
+                }
+                let mut rows: Vec<Vec<String>> = tokens.chunks(count).map(|c| c.to_vec()).collect();
+                let heads = boolean(
+                    design,
+                    node,
+                    "ColumnHeads",
+                    get("ColumnHeads").map(|value| Resolved {
+                        value,
+                        origin: PropertyOrigin::Explicit,
+                    }),
+                    (!axl).then_some(false),
+                )?;
+                if heads.is_none() && axl {
+                    return Err(error("ColumnHeads", "AXL default not verified"));
+                }
+                let headers = if heads.is_some_and(|r| r.value) && !rows.is_empty() {
+                    Some(rows.remove(0))
+                } else {
+                    None
+                };
+                RowSource::Values(ValueList { rows, headers })
+            }
+            "table/query" => {
+                if looks_like_sql(raw) {
+                    RowSource::Sql(raw)
+                } else {
+                    RowSource::Named(raw)
+                }
+            }
+            "field list" => RowSource::FieldList(raw),
+            _ => RowSource::Callback {
+                function: source_type,
+                source: raw,
+            },
+        }
+    };
+    Ok(Lookup {
+        source,
+        column_count: count,
+        widths,
+        bound: if bound == 0 {
+            BoundColumn::RowIndex
+        } else {
+            BoundColumn::Column(bound - 1)
+        },
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum EmbeddedSource<'a> {
+    Empty,
+    Form(&'a str),
+    Report(&'a str),
+    Table(&'a str),
+    Query(&'a str),
+    Unqualified(&'a str),
+    Unknown(&'a str),
+}
+impl<'a> EmbeddedSource<'a> {
+    pub fn parse(raw: &'a str) -> Self {
+        if raw.is_empty() {
+            return Self::Empty;
+        }
+        if let Some((prefix, name)) = raw.split_once('.') {
+            return match prefix.to_ascii_lowercase().as_str() {
+                "form" => Self::Form(name),
+                "report" => Self::Report(name),
+                "table" => Self::Table(name),
+                "query" => Self::Query(name),
+                _ => Self::Unknown(raw),
+            };
+        }
+        Self::Unqualified(raw)
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct SubformLink<'a> {
+    pub source: EmbeddedSource<'a>,
+    pub fields: Vec<LinkField<'a>>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct LinkField<'a> {
+    pub child: &'a str,
+    pub master: &'a str,
+}
+fn link_fields(raw: &str) -> Result<Vec<&str>, &'static str> {
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut fields = Vec::new();
+    let mut start = 0;
+    let mut bracket = false;
+    let mut chars = raw.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '[' if !bracket => bracket = true,
+            ']' if bracket && chars.peek().is_some_and(|(_, c)| *c == ']') => {
+                chars.next();
+            }
+            ']' if bracket => bracket = false,
+            ';' if !bracket => {
+                fields.push(raw[start..i].trim());
+                start = i + 1;
+            }
+            _ => (),
+        }
+    }
+    if bracket {
+        return Err("unclosed bracket in link field");
+    }
+    fields.push(raw[start..].trim());
+    if fields.iter().any(|s| s.is_empty() || *s == "[]") {
+        return Err("empty link field");
+    }
+    Ok(fields)
+}
+impl<'d> Control<'d> {
+    pub fn lookup(self) -> Result<Option<Lookup<'d>>, PropertyError> {
+        if !matches!(self.kind(), ControlKind::ComboBox | ControlKind::ListBox) {
+            return Ok(None);
+        }
+        lookup(
+            self.design.name(),
+            self.name(),
+            self.design.is_axl(),
+            |key| self.effective(key).map(|r| r.value),
+        )
+        .map(Some)
+    }
+    pub fn row_source(self) -> Result<RowSource<'d>, PropertyError> {
+        Ok(self.lookup()?.map(|l| l.source).unwrap_or(RowSource::Empty))
+    }
+    pub fn subform_link(self) -> Result<Option<SubformLink<'d>>, PropertyError> {
+        if self.kind() != ControlKind::Subform {
+            return Ok(None);
+        }
+        let parse = |key| {
+            let raw = self.raw_property(key).unwrap_or("");
+            link_fields(raw).map_err(|reason| {
+                PropertyError::new(self.design.name(), self.name(), key, raw, reason)
+            })
+        };
+        let child = parse("LinkChildFields")?;
+        let master = parse("LinkMasterFields")?;
+        if child.len() != master.len() {
+            return Err(PropertyError::new(
+                self.design.name(),
+                self.name(),
+                "LinkMasterFields",
+                self.raw_property("LinkMasterFields").unwrap_or(""),
+                "child/master field counts differ",
+            ));
+        }
+        Ok(Some(SubformLink {
+            source: EmbeddedSource::parse(self.raw_property("SourceObject").unwrap_or("")),
+            fields: child
+                .into_iter()
+                .zip(master)
+                .map(|(child, master)| LinkField { child, master })
+                .collect(),
+        }))
+    }
+}
+coded_enum!(GroupOn { EachValue=0, PrefixCharacters=1, Year=2, Quarter=3, Month=4, Week=5, Day=6, Hour=7, Minute=8, Interval=9 });
+coded_enum!(GroupKeepTogether { None=0, WholeGroup=1, WithFirstDetail=2 });
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum SortDirection {
+    Ascending,
+    Descending,
+}
+#[derive(Debug, Clone)]
+pub struct GroupLevel<'d> {
+    pub index: usize,
+    pub control_source: &'d str,
+    pub header: bool,
+    pub footer: bool,
+    pub group_on: GroupOn,
+    pub group_interval: i32,
+    pub sort: SortDirection,
+    pub keep_together: GroupKeepTogether,
+    pub header_section: Option<Section<'d>>,
+    pub footer_section: Option<Section<'d>>,
+    /// Associations remain empty on structural ambiguity; levels are never discarded.
+    pub diagnostics: Vec<String>,
+    node: &'d Node,
+}
+impl<'d> GroupLevel<'d> {
+    pub fn raw_node(&self) -> &'d Node {
+        self.node
+    }
+}
+impl Design {
+    pub fn group_levels(&self) -> Result<Vec<GroupLevel<'_>>, PropertyError> {
+        if self.kind == DesignKind::Form {
+            return Ok(Vec::new());
+        }
+        if self.is_axl() {
+            return Err(PropertyError::new(
+                self.name(),
+                "Report",
+                "BreakLevel",
+                "",
+                "AXL group extraction unsupported",
+            ));
+        }
+        fn collect<'a>(node: &'a Node, out: &mut Vec<&'a Node>) {
+            for c in &node.children {
+                if c.kind == "BreakLevel" {
+                    out.push(c);
+                } else if c.kind == "Block" {
+                    collect(c, out);
+                }
+            }
+        }
+        let mut nodes = Vec::new();
+        if let Some(root) = self.root() {
+            collect(root, &mut nodes);
+        }
+        let mut levels = Vec::new();
+        for (index, node) in nodes.into_iter().enumerate() {
+            let number = |key, default: i32| -> Result<i32, PropertyError> {
+                node.get(key)
+                    .map(|value| {
+                        integer(
+                            self.name(),
+                            "BreakLevel",
+                            key,
+                            Resolved {
+                                value,
+                                origin: PropertyOrigin::Explicit,
+                            },
+                            |n| n,
+                        )
+                        .map(|r| r.value)
+                    })
+                    .unwrap_or(Ok(default))
+            };
+            let flag = |key| -> Result<bool, PropertyError> {
+                Ok(boolean(
+                    self.name(),
+                    "BreakLevel",
+                    key,
+                    node.get(key).map(|value| Resolved {
+                        value,
+                        origin: PropertyOrigin::Explicit,
+                    }),
+                    Some(false),
+                )?
+                .unwrap()
+                .value)
+            };
+            levels.push(GroupLevel {
+                index,
+                control_source: node.get("ControlSource").unwrap_or(""),
+                header: flag("GroupHeader")?,
+                footer: flag("GroupFooter")?,
+                group_on: GroupOn::from_code(number("GroupOn", 0)?),
+                group_interval: number("GroupInterval", 1)?,
+                sort: if flag("SortOrder")? {
+                    SortDirection::Descending
+                } else {
+                    SortDirection::Ascending
+                },
+                keep_together: GroupKeepTogether::from_code(number("KeepTogether", 0)?),
+                header_section: None,
+                footer_section: None,
+                diagnostics: Vec::new(),
+                node,
+            });
+        }
+        let headers: Vec<_> = self
+            .sections()
+            .into_iter()
+            .filter(|s| s.kind() == SectionKind::GroupHeader)
+            .collect();
+        let footers: Vec<_> = self
+            .sections()
+            .into_iter()
+            .filter(|s| s.kind() == SectionKind::GroupFooter)
+            .collect();
+        if headers.len() == levels.iter().filter(|l| l.header).count()
+            && footers.len() == levels.iter().filter(|l| l.footer).count()
+        {
+            for (level, section) in levels.iter_mut().filter(|l| l.header).zip(headers) {
+                level.header_section = Some(section);
+            }
+            for (level, section) in levels.iter_mut().rev().filter(|l| l.footer).zip(footers) {
+                level.footer_section = Some(section);
+            }
+        } else {
+            for level in &mut levels {
+                level
+                    .diagnostics
+                    .push("group/section counts disagree; associations unresolved".into());
+            }
+        }
+        Ok(levels)
     }
 }

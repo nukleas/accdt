@@ -724,3 +724,92 @@ mod tests {
         assert_eq!(resolve_target(base, "/template/x.xml"), "template/x.xml");
     }
 }
+
+/// Resolution uses the package index only, with ASCII case-insensitive names.
+/// This is not Access's locale-dependent collation.
+#[derive(Debug, Clone)]
+pub enum ResolvedObject<'p, 's> {
+    Empty,
+    Found(&'p ObjectEntry),
+    Missing(&'s str),
+    Ambiguous(Vec<&'p ObjectEntry>),
+}
+#[derive(Debug, Clone)]
+pub enum ResolvedRecordSource<'p, 's> {
+    Unbound,
+    Table(&'p ObjectEntry),
+    Query(&'p ObjectEntry),
+    Sql(&'s str),
+    Missing(&'s str),
+    Ambiguous(Vec<&'p ObjectEntry>),
+}
+impl Package {
+    pub fn resolve_name<'p, 's>(
+        &'p self,
+        name: &'s str,
+        kinds: &[ObjectKind],
+    ) -> ResolvedObject<'p, 's> {
+        if name.trim().is_empty() {
+            return ResolvedObject::Empty;
+        }
+        let normalized = name.trim();
+        let normalized = normalized
+            .strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .map(|s| s.replace("]]", "]"))
+            .unwrap_or_else(|| normalized.into());
+        let matches: Vec<_> = self
+            .objects()
+            .iter()
+            .filter(|o| kinds.contains(&o.kind) && o.name.eq_ignore_ascii_case(&normalized))
+            .collect();
+        match matches.as_slice() {
+            [] => ResolvedObject::Missing(name),
+            [entry] => ResolvedObject::Found(entry),
+            _ => ResolvedObject::Ambiguous(matches),
+        }
+    }
+    pub fn resolve_record_source<'p, 's>(
+        &'p self,
+        source: crate::RecordSource<'s>,
+    ) -> ResolvedRecordSource<'p, 's> {
+        match self.resolve_name(source.raw(), &[ObjectKind::Table, ObjectKind::Query]) {
+            ResolvedObject::Empty => ResolvedRecordSource::Unbound,
+            ResolvedObject::Found(o) if o.kind == ObjectKind::Table => {
+                ResolvedRecordSource::Table(o)
+            }
+            ResolvedObject::Found(o) => ResolvedRecordSource::Query(o),
+            ResolvedObject::Ambiguous(o) => ResolvedRecordSource::Ambiguous(o),
+            ResolvedObject::Missing(s) => {
+                if matches!(source, crate::RecordSource::Sql(_)) {
+                    ResolvedRecordSource::Sql(s)
+                } else {
+                    ResolvedRecordSource::Missing(s)
+                }
+            }
+        }
+    }
+    pub fn resolve_embedded_source<'p, 's>(
+        &'p self,
+        source: crate::EmbeddedSource<'s>,
+    ) -> ResolvedObject<'p, 's> {
+        use crate::EmbeddedSource::*;
+        match source {
+            Empty => ResolvedObject::Empty,
+            Form(s) => self.resolve_name(s, &[ObjectKind::Form]),
+            Report(s) => self.resolve_name(s, &[ObjectKind::Report]),
+            Table(s) => self.resolve_name(s, &[ObjectKind::Table]),
+            Query(s) => self.resolve_name(s, &[ObjectKind::Query]),
+            Unqualified(s) => self.resolve_name(
+                s,
+                &[
+                    ObjectKind::Form,
+                    ObjectKind::Report,
+                    ObjectKind::Table,
+                    ObjectKind::Query,
+                ],
+            ),
+            Unknown(s) => ResolvedObject::Missing(s),
+        }
+    }
+}

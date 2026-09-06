@@ -211,3 +211,26 @@ fn login_form_and_queries() {
             .any(|r| r.enforces_integrity())
     );
 }
+
+#[test]
+fn desktop_group_sections_match_nested_levels() {
+    let Some(pkg) = open() else { return };
+    let mut nested = 0;
+    for report in pkg.reports().unwrap() {
+        let groups = report.group_levels().unwrap();
+        if groups.iter().filter(|g| g.header).count() > 1 {
+            nested += 1;
+        }
+        for group in groups {
+            assert!(
+                group.diagnostics.is_empty(),
+                "{}: {:?}",
+                report.name(),
+                group.diagnostics
+            );
+            assert_eq!(group.header, group.header_section.is_some());
+            assert_eq!(group.footer, group.footer_section.is_some());
+        }
+    }
+    assert!(nested > 0, "Northwind must provide nested header evidence");
+}

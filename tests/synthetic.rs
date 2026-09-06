@@ -153,7 +153,7 @@ fn reads_every_part() {
     );
 
     let f = pkg.form("Main Form").unwrap();
-    assert_eq!(f.record_source(), Some("Companies"));
+    assert_eq!(f.record_source(), accdt::RecordSource::Named("Companies"));
     assert_eq!(f.get("Caption"), Some("Main \"window\" for everything"));
     assert_eq!(
         f.controls().iter().map(|c| c.name()).collect::<Vec<_>>(),

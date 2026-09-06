@@ -79,6 +79,16 @@ impl Column {
             .find(|(n, _, _)| n == name)
             .map(|(_, _, v)| v.as_str())
     }
+    pub fn lookup(&self) -> Result<Option<crate::Lookup<'_>>, crate::PropertyError> {
+        let applicable = matches!(
+            self.display_control()?.map(|r| r.value),
+            Some(crate::ControlKind::ComboBox | crate::ControlKind::ListBox)
+        ) || self.property("RowSource").is_some();
+        if !applicable {
+            return Ok(None);
+        }
+        crate::design::lookup("", &self.name, false, |key| self.property(key)).map(Some)
+    }
     pub fn display_control(&self) -> crate::PropertyResult<crate::ControlKind> {
         self.property("DisplayControl")
             .map(|value| {

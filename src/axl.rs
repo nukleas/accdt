@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn form_becomes_a_design() {
         let d = Design::parse_axl("Contacts", DesignKind::Form, FORM.into()).unwrap();
-        assert_eq!(d.record_source(), Some("Contacts"));
+        assert_eq!(d.record_source(), crate::RecordSource::Named("Contacts"));
         assert_eq!(d.get("Caption"), Some("Contact List"));
         let ctrls = d.controls();
         let names: Vec<&str> = ctrls.iter().map(|c| c.name()).collect();
