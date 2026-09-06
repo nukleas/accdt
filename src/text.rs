@@ -4,8 +4,9 @@
 /// sequences and a dangling trailing byte become U+FFFD.
 pub fn decode(bytes: &[u8]) -> String {
     let utf16 = |body: &[u8], from: fn([u8; 2]) -> u16| {
-        let mut units: Vec<u16> = body.chunks_exact(2).map(|c| from([c[0], c[1]])).collect();
-        if !body.len().is_multiple_of(2) {
+        let (pairs, rest) = body.as_chunks::<2>();
+        let mut units: Vec<u16> = pairs.iter().map(|c| from(*c)).collect();
+        if !rest.is_empty() {
             units.push(0xFFFD);
         }
         String::from_utf16_lossy(&units)
