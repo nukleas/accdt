@@ -86,8 +86,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     println!("{}: {}", p.name, p.value);
                 }
             }
-            for k in [ObjectKind::Table, ObjectKind::Query, ObjectKind::Form, ObjectKind::Report, ObjectKind::Macro, ObjectKind::Module] {
-                println!("{:<8} {}", k.as_str(), pkg.objects_of(k).count());
+            for k in [ObjectKind::Table, ObjectKind::Query, ObjectKind::Form, ObjectKind::Report, ObjectKind::Macro, ObjectKind::Module, ObjectKind::Link] {
+                let n = pkg.objects_of(k).count();
+                if n > 0 || k != ObjectKind::Link {
+                    let axl = pkg.objects_of(k).filter(|o| o.format == accdt::PartFormat::Axl).count();
+                    let variations: usize = pkg.objects_of(k).map(|o| o.variations.len()).sum();
+                    println!("{:<8} {}{}{}", k.as_str(), n, if axl > 0 { format!(" ({axl} axl)") } else { String::new() }, if variations > 0 { format!(" (+{variations} variations)") } else { String::new() });
+                }
+            }
+            for t in pkg.tables()? {
+                if let Some(sp) = &t.sharepoint {
+                    println!("sharepoint list: {} (template {})", t.name, sp.template_id.map(|i| i.to_string()).unwrap_or_default());
+                }
+            }
+            for l in pkg.list_definitions()? {
+                println!("list definition: {} (template {}, {} fields)", l.list_name, l.template_id.map(|i| i.to_string()).unwrap_or_default(), l.fields.len());
             }
             println!("relationships: {}", pkg.relationships()?.len());
             for r in pkg.vba_references()? {
@@ -131,6 +144,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ObjectKind::Report => serde_json::to_string_pretty(&design_json(&pkg.report(&name)?))?,
                 ObjectKind::Macro => serde_json::to_string_pretty(&pkg.ui_macro(&name)?)?,
                 ObjectKind::Module => serde_json::to_string_pretty(&pkg.module(&name)?)?,
+                ObjectKind::Link => {
+                    let o = pkg.object(k, &name).ok_or_else(|| format!("no link named {name}"))?;
+                    serde_json::to_string_pretty(&serde_json::json!({"name": o.name, "xml": pkg.object_text(o)?}))?
+                }
             };
             println!("{json}");
         }

@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 
+use crate::axl::{self, ListDefinition};
 use crate::database::{self, CoreProperties, Property, Relationship, TemplateInfo, VbaReference};
 use crate::datamacro::{self, DataMacro};
 use crate::design::{Design, DesignKind};
@@ -18,6 +19,8 @@ const REL_METADATA: &str = "template/object-metadata";
 const REL_PROPERTIES: &str = "relationships/ObjectProperties";
 const REL_TABLE_DATA: &str = "template/table-data";
 const REL_DATAMACROS: &str = "relationships/DataMacros";
+const REL_VARIATION: &str = "template/variation";
+const REL_LIST_DEFINITION: &str = "relationships/ListInstanceDefinition";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -28,6 +31,8 @@ pub enum ObjectKind {
     Report,
     Macro,
     Module,
+    /// A linked table (`Link` / `SQLLink` in the object metadata); its part is free-form XML.
+    Link,
 }
 
 impl std::str::FromStr for ObjectKind {
@@ -47,6 +52,7 @@ impl ObjectKind {
             "report" => Some(ObjectKind::Report),
             "macro" => Some(ObjectKind::Macro),
             "module" => Some(ObjectKind::Module),
+            "link" | "sqllink" => Some(ObjectKind::Link),
             _ => None,
         }
     }
@@ -58,8 +64,33 @@ impl ObjectKind {
             ObjectKind::Report => "report",
             ObjectKind::Macro => "macro",
             ObjectKind::Module => "module",
+            ObjectKind::Link => "link",
         }
     }
+}
+
+/// How an object's main part is encoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum PartFormat {
+    /// `Application.SaveAsText` text (forms, reports, macros, queries of desktop templates).
+    SaveAsText,
+    /// Access Services XML (forms, reports, queries of web-database templates).
+    Axl,
+    /// XML Schema (tables).
+    Xsd,
+    /// VBA source (modules).
+    Vba,
+    /// Other XML (linked-table parts).
+    Xml,
+}
+
+/// A localisation variant of an object (`template/variation` relationship), e.g. `FlipName`.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct Variation {
+    pub id: String,
+    pub part: String,
 }
 
 /// One database object and the parts that describe it.
@@ -68,12 +99,16 @@ impl ObjectKind {
 pub struct ObjectEntry {
     pub kind: ObjectKind,
     pub name: String,
-    /// The main part (`.xsd` for tables, `.txt` for everything else).
+    /// The main part (`.xsd` for tables, `.txt`/`.axl` for everything else).
     pub part: String,
+    pub format: PartFormat,
     pub metadata_part: Option<String>,
     pub properties_part: Option<String>,
     pub data_part: Option<String>,
     pub datamacros_part: Option<String>,
+    /// SharePoint list template id from the metadata part, for list-linked tables.
+    pub wss_template_id: Option<u32>,
+    pub variations: Vec<Variation>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,15 +179,37 @@ impl Package {
     }
 
     fn index_objects(&self) -> Result<Vec<ObjectEntry>> {
-        let mut out = Vec::new();
+        // Parts reachable only as another object's variation are not objects of their own.
+        let mut variation_parts = std::collections::BTreeSet::new();
+        let mut rels_of: BTreeMap<String, Vec<(String, String, String)>> = BTreeMap::new();
         for name in self.parts.keys() {
             let Some(file) = name.strip_prefix(OBJECTS) else { continue };
             if file.contains('/') {
                 continue;
             }
+            let rels = self.relationships_with_ids(&format!("{OBJECTS}_rels/{file}.rels"))?;
+            for (t, target, _) in &rels {
+                if t.ends_with(REL_VARIATION) {
+                    variation_parts.insert(resolve_target(OBJECTS, target));
+                }
+            }
+            rels_of.insert(name.clone(), rels);
+        }
+        let mut out = Vec::new();
+        for (name, rels) in &rels_of {
+            if variation_parts.contains(name) {
+                continue;
+            }
+            let file = &name[OBJECTS.len()..];
             let Some((base, ext)) = file.rsplit_once('.') else { continue };
-            let rels = self.relationships_of(&format!("{OBJECTS}_rels/{file}.rels"))?;
-            let find = |suffix: &str| rels.iter().find(|(t, _)| t.ends_with(suffix)).map(|(_, target)| resolve_target(OBJECTS, target));
+            let format = match ext {
+                "xsd" => PartFormat::Xsd,
+                "axl" => PartFormat::Axl,
+                "txt" => PartFormat::SaveAsText,
+                "caml" => continue,
+                _ => PartFormat::Xml,
+            };
+            let find = |suffix: &str| rels.iter().find(|(t, _, _)| t.ends_with(suffix)).map(|(_, target, _)| resolve_target(OBJECTS, target));
             let metadata_part = find(REL_METADATA).or_else(|| {
                 let p = format!("{OBJECTS}properties/{base}_Metadata.xml");
                 self.parts.contains_key(&p).then_some(p)
@@ -161,31 +218,39 @@ impl Package {
                 Some(p) => parse_metadata(p, self.part_required(p)?)?,
                 None => None,
             };
-            let (kind, obj_name) = match metadata {
-                Some((t, n)) => match ObjectKind::from_type(&t) {
-                    Some(k) => (k, n),
+            let (kind, obj_name, wss) = match metadata {
+                Some(m) => match ObjectKind::from_type(&m.kind) {
+                    Some(k) => (k, m.name, m.wss_template_id),
                     None => continue,
                 },
                 None => {
                     // No metadata part (hand-made packages): the file name carries the kind.
                     let prefixes = ["table", "query", "form", "report", "macro", "module"];
                     match prefixes.iter().find(|p| base.starts_with(*p)) {
-                        Some(p) => (ObjectKind::from_type(p).unwrap(), base[p.len()..].to_string()),
+                        Some(p) => (ObjectKind::from_type(p).unwrap(), base[p.len()..].to_string(), None),
                         None => continue,
                     }
                 }
             };
-            if (kind == ObjectKind::Table) != (ext == "xsd") {
+            if kind != ObjectKind::Link && ((kind == ObjectKind::Table) != (format == PartFormat::Xsd)) {
                 continue;
             }
+            let format = if kind == ObjectKind::Module { PartFormat::Vba } else { format };
             out.push(ObjectEntry {
                 kind,
                 name: obj_name,
                 part: name.clone(),
+                format,
                 metadata_part,
                 properties_part: find(REL_PROPERTIES),
                 data_part: find(REL_TABLE_DATA),
                 datamacros_part: find(REL_DATAMACROS),
+                wss_template_id: wss,
+                variations: rels
+                    .iter()
+                    .filter(|(t, _, _)| t.ends_with(REL_VARIATION))
+                    .map(|(_, target, id)| Variation { id: id.clone(), part: resolve_target(OBJECTS, target) })
+                    .collect(),
             });
         }
         out.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
@@ -195,13 +260,18 @@ impl Package {
     /// `(relationship type, target)` pairs of an OPC `.rels` part; empty when absent, an
     /// error when present but malformed.
     fn relationships_of(&self, rels_part: &str) -> Result<Vec<(String, String)>> {
+        Ok(self.relationships_with_ids(rels_part)?.into_iter().map(|(t, target, _)| (t, target)).collect())
+    }
+
+    /// `(type, target, id)` triples of an OPC `.rels` part.
+    fn relationships_with_ids(&self, rels_part: &str) -> Result<Vec<(String, String, String)>> {
         let Some(bytes) = self.parts.get(rels_part) else { return Ok(Vec::new()) };
         let xml = text::decode_xml(bytes);
         let doc = text::parse_xml(rels_part, &xml)?;
         Ok(doc
             .descendants()
             .filter(|n| n.is_element() && n.tag_name().name() == "Relationship")
-            .filter_map(|n| Some((n.attribute("Type")?.to_string(), n.attribute("Target")?.to_string())))
+            .filter_map(|n| Some((n.attribute("Type")?.to_string(), n.attribute("Target")?.to_string(), n.attribute("Id").unwrap_or("").to_string())))
             .collect())
     }
 
@@ -301,6 +371,10 @@ impl Package {
         if let Some(dp) = &o.data_part {
             table::parse_data(dp, &mut t, self.part_required(dp)?)?;
         }
+        // Web-database tables carry the SharePoint template id in their metadata part only.
+        if let (None, Some(id)) = (&t.sharepoint, o.wss_template_id) {
+            t.sharepoint = Some(table::SharePointList { template_id: Some(id), ..Default::default() });
+        }
         Ok(t)
     }
 
@@ -329,7 +403,65 @@ impl Package {
     }
 
     fn design_of(&self, o: &ObjectEntry, kind: DesignKind) -> Result<Design> {
-        Ok(Design::parse(&o.name, kind, self.object_text(o)?))
+        self.design_from_part(&o.name, kind, o.format, &o.part)
+    }
+
+    fn design_from_part(&self, name: &str, kind: DesignKind, format: PartFormat, part: &str) -> Result<Design> {
+        let text = text::decode(self.part_required(part)?);
+        match format {
+            PartFormat::Axl => Design::parse_axl(name, kind, text::decode_xml(text.as_bytes())),
+            _ => Ok(Design::parse(name, kind, text)),
+        }
+    }
+
+    fn query_from_part(&self, name: &str, format: PartFormat, part: &str) -> Result<Query> {
+        let text = text::decode(self.part_required(part)?);
+        match format {
+            PartFormat::Axl => Query::parse_axl(name, text::decode_xml(text.as_bytes())),
+            _ => Ok(Query::parse(name, text)),
+        }
+    }
+
+    /// A localisation variation of an object (form, report, query or table), by relationship id
+    /// (`FlipName`, `AddFurigana`, …). The variation is read as the same kind of object.
+    pub fn variation_part<'a>(&self, object: &'a ObjectEntry, id: &str) -> Option<&'a str> {
+        object.variations.iter().find(|v| v.id.eq_ignore_ascii_case(id)).map(|v| v.part.as_str())
+    }
+
+    pub fn form_variation(&self, name: &str, id: &str) -> Result<Design> {
+        let o = self.object_required(ObjectKind::Form, name)?;
+        let part = self.variation_part(o, id).ok_or_else(|| Error::MissingObject { kind: "form variation", name: format!("{name}/{id}") })?;
+        self.design_from_part(&format!("{name}/{id}"), DesignKind::Form, o.format, part)
+    }
+
+    pub fn report_variation(&self, name: &str, id: &str) -> Result<Design> {
+        let o = self.object_required(ObjectKind::Report, name)?;
+        let part = self.variation_part(o, id).ok_or_else(|| Error::MissingObject { kind: "report variation", name: format!("{name}/{id}") })?;
+        self.design_from_part(&format!("{name}/{id}"), DesignKind::Report, o.format, part)
+    }
+
+    pub fn query_variation(&self, name: &str, id: &str) -> Result<Query> {
+        let o = self.object_required(ObjectKind::Query, name)?;
+        let part = self.variation_part(o, id).ok_or_else(|| Error::MissingObject { kind: "query variation", name: format!("{name}/{id}") })?;
+        self.query_from_part(&format!("{name}/{id}"), o.format, part)
+    }
+
+    pub fn table_variation(&self, name: &str, id: &str) -> Result<Table> {
+        let o = self.object_required(ObjectKind::Table, name)?;
+        let part = self.variation_part(o, id).ok_or_else(|| Error::MissingObject { kind: "table variation", name: format!("{name}/{id}") })?;
+        table::parse_schema(part, &format!("{name}/{id}"), self.part_required(part)?)
+    }
+
+    /// SharePoint list definitions (`.caml` parts) a web-database template creates on publish.
+    pub fn list_definitions(&self) -> Result<Vec<ListDefinition>> {
+        let mut out = Vec::new();
+        for (t, target) in self.relationships_of("template/_rels/template.xml.rels")? {
+            if t.ends_with(REL_LIST_DEFINITION) {
+                let part = resolve_target("template/", &target);
+                out.push(axl::list_definition(&part, self.part_required(&part)?)?);
+            }
+        }
+        Ok(out)
     }
 
     pub fn modules(&self) -> Result<Vec<Module>> {
@@ -355,12 +487,12 @@ impl Package {
     }
 
     pub fn queries(&self) -> Result<Vec<Query>> {
-        self.objects_of(ObjectKind::Query).map(|o| Ok(Query::parse(&o.name, self.object_text(o)?))).collect()
+        self.objects_of(ObjectKind::Query).map(|o| self.query_from_part(&o.name, o.format, &o.part)).collect()
     }
 
     pub fn query(&self, name: &str) -> Result<Query> {
         let o = self.object_required(ObjectKind::Query, name)?;
-        Ok(Query::parse(&o.name, self.object_text(o)?))
+        self.query_from_part(&o.name, o.format, &o.part)
     }
 
     /// Raw text of any non-table object (SaveAsText or VBA).
@@ -410,13 +542,19 @@ fn resolve_target(base_dir: &str, target: &str) -> String {
     out.join("/")
 }
 
-/// `(Type, Name)` from an object's metadata part.
-fn parse_metadata(part: &str, bytes: &[u8]) -> Result<Option<(String, String)>> {
-    let xml = text::decode_xml(bytes);
+struct Metadata {
+    kind: String,
+    name: String,
+    wss_template_id: Option<u32>,
+}
+
+/// Type, name and SharePoint template id from an object's metadata part.
+fn parse_metadata(part: &str, bytes: &[u8]) -> Result<Option<Metadata>> {
+    let xml = text::decode_xml(bytes).replacen("encoding=\"unicode\"", "encoding=\"UTF-8\"", 1);
     let doc = text::parse_xml(part, &xml)?;
     let root = doc.root_element();
     let get = |k: &str| root.children().find(|c| c.is_element() && c.tag_name().name() == k).and_then(|c| c.text()).map(|t| t.to_string());
-    Ok(get("Type").zip(get("Name")))
+    Ok(get("Type").zip(get("Name")).map(|(kind, name)| Metadata { kind, name, wss_template_id: get("WSSTemplateID").and_then(|v| v.trim().parse().ok()) }))
 }
 
 fn walk_dir(dir: &Path, base: &Path, out: &mut BTreeMap<String, Vec<u8>>) -> Result<()> {

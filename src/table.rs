@@ -129,6 +129,20 @@ impl Value {
     }
 }
 
+/// A table that is a link to a SharePoint list rather than local data.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct SharePointList {
+    /// List template id (100 generic, 105 contacts, 106 events, 107 tasks, 1100 issues, …).
+    pub template_id: Option<u32>,
+    pub root_folder: Option<String>,
+    pub default_view_url: Option<String>,
+    pub version: Option<String>,
+    pub last_modified: Option<String>,
+    pub display_views_on_site: bool,
+    pub document_library: bool,
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Table {
@@ -137,6 +151,8 @@ pub struct Table {
     pub indexes: Vec<Index>,
     /// `od:tableProperty` entries: `(name, type code, value)`.
     pub properties: Vec<(String, String, String)>,
+    /// Present when the table is a SharePoint list link (`WSS*` table properties).
+    pub sharepoint: Option<SharePointList>,
     /// Rows from the sample-data part, cells in `columns` order (`None` for absent/null).
     pub rows: Vec<Vec<Option<Value>>>,
     /// Whether a sample-data part existed (a table can legitimately have zero rows).
@@ -146,6 +162,15 @@ pub struct Table {
 impl Table {
     pub fn primary_key(&self) -> Option<&Index> {
         self.indexes.iter().find(|i| i.primary)
+    }
+
+    pub fn property(&self, name: &str) -> Option<&str> {
+        self.properties.iter().find(|(n, _, _)| n == name).map(|(_, _, v)| v.as_str())
+    }
+
+    /// True for a SharePoint list link; its rows live on the server, not in the template.
+    pub fn is_linked(&self) -> bool {
+        self.sharepoint.is_some()
     }
 
     /// Column by name, case-insensitively (Access names are case-insensitive).
@@ -175,7 +200,7 @@ pub(crate) fn parse_schema(part: &str, name: &str, bytes: &[u8]) -> crate::Resul
         .filter(|n| n.has_tag_name((XSD, "element")))
         .find(|n| n.attribute("name").is_some_and(|a| a != "dataroot") && n.parent().is_some_and(|p| p.has_tag_name((XSD, "schema"))))
         .ok_or_else(|| crate::Error::Invalid { part: part.to_string(), reason: "no table element in schema".into() })?;
-    let mut table = Table { name: name.to_string(), columns: Vec::new(), indexes: Vec::new(), properties: Vec::new(), rows: Vec::new(), has_data_part: false };
+    let mut table = Table { name: name.to_string(), columns: Vec::new(), indexes: Vec::new(), properties: Vec::new(), sharepoint: None, rows: Vec::new(), has_data_part: false };
     for n in table_el.descendants() {
         if n.has_tag_name((OD, "index")) {
             let key = n.attribute("index-key").unwrap_or("");
@@ -193,6 +218,17 @@ pub(crate) fn parse_schema(part: &str, name: &str, bytes: &[u8]) -> crate::Resul
                 n.attribute("value").unwrap_or("").trim().to_string(),
             ));
         }
+    }
+    if table.properties.iter().any(|(n, _, _)| n.starts_with("WSS")) {
+        table.sharepoint = Some(SharePointList {
+            template_id: table.property("WSSTemplateID").and_then(|v| v.parse().ok()),
+            root_folder: table.property("WSSRootFolder").map(String::from),
+            default_view_url: table.property("DefaultViewUrl").map(String::from),
+            version: table.property("WSSVersion").map(String::from),
+            last_modified: table.property("WSSLastModified").map(String::from),
+            display_views_on_site: table.property("DisplayViewsOnSharePointSite") == Some("1"),
+            document_library: table.property("DocumentLibrary") == Some("1"),
+        });
     }
     let sequence = table_el.descendants().find(|n| n.has_tag_name((XSD, "sequence")));
     if let Some(seq) = sequence {

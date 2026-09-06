@@ -57,6 +57,11 @@ What is covered:
 | `relationships.xml` | `relationships()` with integrity and cascade flags |
 | `vbaReferences.xml` | `vba_references()` with names for well-known type libraries and a 32-bit-only flag |
 | `resources/` | `resources()` |
+| Web databases (Access 2010 Access Services): forms/reports/queries as AXL XML | Same `forms()`/`reports()`/`queries()` API; `Design::is_axl()`, `ObjectEntry::format`. AXL UI macros appear as embedded macros; report items and query definitions map onto the same types |
+| SharePoint list links (`WSS*` table properties, metadata `WSSTemplateID`) | `Table::sharepoint` (`SharePointList`: template id, root folder, view URL, version), `Table::is_linked()` |
+| List definitions (`.caml` parts, `ListInstanceDefinition` relationships) | `list_definitions()`: list name, template id, fields with types |
+| Localisation variations (`template/variation` relationships: `FlipName`, `AddFurigana`, …) | grouped under the base object as `ObjectEntry::variations`; `form_variation()`, `report_variation()`, `query_variation()`, `table_variation()` |
+| Linked tables (`Link` / `SQLLink` object types) | indexed as `ObjectKind::Link` with the raw part; no Microsoft template ships one |
 | `*_Properties.axl`, `*_Metadata.xml` | `object_properties()`, `objects()` |
 | Anything else | `part(name)` |
 
@@ -84,13 +89,21 @@ accdt export northwind.accdt out/
 
 ## Testing
 
-Unit tests build packages in memory. The integration test in `tests/northwind.rs` runs
-against Microsoft's Northwind 2.0 Developer Edition template when it is present:
+Unit tests build packages in memory. `tests/northwind.rs` runs against Microsoft's
+Northwind 2.0 Developer Edition template and requires it (set
+`ACCDT_SKIP_FIXTURE_TESTS=1` to skip):
 
 ```bash
 scripts/fetch-fixtures.sh   # downloads tests/fixtures/northwind-2.0-dev.accdt
 cargo test
 ```
+
+`tests/webdb.rs` covers the Access 2010 web-database and SharePoint list templates
+(`wss-107-tasks.accdt`, `wss-1100-issues.accdt`, `access2010-contacts-web.accdt`). Those are
+not on Microsoft's CDN; they are the `ACCESSTEMPLATE_*.ACCDT_1033` entries of `AccLR.cab`
+on the Access 2010 install media (also `Templates\1033\Access\WSS\{107,1100}.accdt` on a
+Windows Office install). Drop them into `tests/fixtures/` and the tests run; otherwise they
+skip.
 
 ## Formats
 

@@ -102,6 +102,20 @@ impl Design {
         Design { name: name.to_string(), kind, document: saveastext::parse(&text), text }
     }
 
+    /// Parse an Access Services (web database) form or report from its AXL XML.
+    pub fn parse_axl(name: &str, kind: DesignKind, xml: String) -> crate::Result<Design> {
+        let document = match kind {
+            DesignKind::Form => crate::axl::form_document(name, &xml)?,
+            DesignKind::Report => crate::axl::report_document(name, &xml)?,
+        };
+        Ok(Design { name: name.to_string(), kind, document, text: xml })
+    }
+
+    /// True when the design came from AXL (web database) rather than SaveAsText.
+    pub fn is_axl(&self) -> bool {
+        self.document.get("Format") == Some("axl")
+    }
+
     fn root(&self) -> Option<&Node> {
         self.document.blocks.first()
     }

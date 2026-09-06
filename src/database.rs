@@ -15,6 +15,9 @@ pub struct TemplateInfo {
     pub collating_order: Option<String>,
     pub flip_right_to_left: bool,
     pub perform_localization_fixup: bool,
+    pub perform_font_fixup: bool,
+    /// Which localisation variation the template was saved as (`""` for the base).
+    pub variation_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -137,6 +140,8 @@ pub(crate) fn parse_template(part: &str, bytes: &[u8]) -> crate::Result<Template
         collating_order: child_text(root, "CollatingOrder"),
         flip_right_to_left: child_text(root, "FlipRightToLeft").is_some_and(|v| v == "1"),
         perform_localization_fixup: child_text(root, "PerformLocalizationFixup").is_some_and(|v| v == "1"),
+        perform_font_fixup: child_text(root, "PerformFontFixup").is_some_and(|v| v == "1"),
+        variation_identifier: child_text(root, "VariationIdentifier").map(|v| v.trim_matches('"').to_string()),
     })
 }
 

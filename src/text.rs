@@ -26,6 +26,7 @@ pub fn decode_xml(bytes: &[u8]) -> String {
     let text = decode(bytes);
     text.replacen("encoding=\"UTF-16\"", "encoding=\"UTF-8\"", 1)
         .replacen("encoding=\"utf-16\"", "encoding=\"UTF-8\"", 1)
+        .replacen("encoding=\"unicode\"", "encoding=\"UTF-8\"", 1)
 }
 
 /// Undo the `_xHHHH_` escaping Access uses for XML names ("Order_x0020_Details").

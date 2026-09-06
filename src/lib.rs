@@ -18,11 +18,16 @@
 //! # Ok::<(), accdt::Error>(())
 //! ```
 //!
+//! Web databases (Access 2010 Access Services templates) store forms, reports and queries
+//! as AXL XML instead of SaveAsText; they are read into the same types, and their SharePoint
+//! list links and list definitions are exposed.
+//!
 //! Formats: [MS-ACCDT](https://learn.microsoft.com/en-us/openspecs/sharepoint_protocols/ms-accdt/)
 //! for the package and [MS-AXL](https://learn.microsoft.com/en-us/openspecs/sharepoint_protocols/ms-axl/)
 //! for the XML parts. The SaveAsText format is undocumented; the parser here is derived from
 //! real exports.
 
+mod axl;
 mod database;
 mod datamacro;
 mod design;
@@ -36,9 +41,10 @@ pub mod text;
 
 pub use database::{CoreProperties, Property, Relationship, TemplateInfo, VbaReference};
 pub use datamacro::{DataMacro, DataMacroAction};
+pub use axl::{ListDefinition, ListField};
 pub use design::{Control, Design, DesignKind, Event, Layout};
 pub use error::{Error, Result};
 pub use macros::{Macro, MacroAction};
-pub use package::{Module, ObjectEntry, ObjectKind, Package, Resource};
+pub use package::{Module, ObjectEntry, ObjectKind, Package, PartFormat, Resource, Variation};
 pub use query::{Join, Operation, OutputColumn, Query, QueryDef, Sql, SqlSource};
-pub use table::{Column, Index, JetType, Table, Value};
+pub use table::{Column, Index, JetType, SharePointList, Table, Value};

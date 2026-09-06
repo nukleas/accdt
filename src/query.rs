@@ -115,6 +115,12 @@ impl Query {
         Query { name: name.to_string(), definition: QueryDef::from_document(&doc), text }
     }
 
+    /// Parse an Access Services (web database) query from its AXL XML. Expressions keep
+    /// Access Services syntax (`Concatenate.Db(...)`), so the SQL is a structural rendering.
+    pub fn parse_axl(name: &str, xml: String) -> crate::Result<Query> {
+        Ok(Query { name: name.to_string(), definition: crate::axl::query_def(name, &xml)?, text: xml })
+    }
+
     pub fn to_sql(&self) -> Sql {
         self.definition.to_sql()
     }
