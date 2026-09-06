@@ -274,12 +274,8 @@ pub fn hex_bytes(v: &str) -> Option<Vec<u8>> {
         return None;
     }
     let hex = |b: u8| (b as char).to_digit(16).unwrap() as u8;
-    Some(
-        digits
-            .chunks_exact(2)
-            .map(|p| hex(p[0]) << 4 | hex(p[1]))
-            .collect(),
-    )
+    let (pairs, _) = digits.as_chunks::<2>();
+    Some(pairs.iter().map(|p| hex(p[0]) << 4 | hex(p[1])).collect())
 }
 
 #[cfg(test)]
