@@ -52,7 +52,7 @@ What is covered:
 | `dataMacros/*.axl` | `data_macros(table)` |
 | Forms and reports (SaveAsText) | `forms()`, `reports()`, `form(name)`, `report(name)`: properties, control tree with layout, sections, events (`On*` and `AfterUpdate`-style), embedded macros as parsed `Macro`s, code-behind VBA, per-type control defaults |
 | Macros (SaveAsText) | `macros()`, `ui_macro(name)`: actions with conditions and arguments |
-| Queries (SaveAsText) | `queries()`, `query(name)`: tables and aliases, columns, joins, where/having/group/order, parameters, properties; `to_sql()` returns the stored SQL when Access kept it (union, pass-through, `TOP`), otherwise rebuilds select queries with alias-aware joins and a `PARAMETERS` clause, and says which it did |
+| Queries (SaveAsText) | `queries()`, `query(name)`: tables and aliases, columns, joins, where/having/group/order, parameters, properties; `to_sql()` returns the stored SQL when Access kept it (union, pass-through, `TOP`), otherwise rebuilds select, append (`INSERT INTO … SELECT`), update, delete and make-table queries with alias-aware joins and a `PARAMETERS` clause, and says which it did; crosstab, DDL and pass-through queries without stored SQL come back as a commented skeleton |
 | Modules | `modules()`, `module(name)` |
 | `relationships.xml` | `relationships()` with integrity and cascade flags |
 | `vbaReferences.xml` | `vba_references()` with names for well-known type libraries and a 32-bit-only flag |
