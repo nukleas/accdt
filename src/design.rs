@@ -14,13 +14,34 @@ pub enum DesignKind {
 }
 
 const SECTION_KINDS: &[&str] = &[
-    "FormHeader", "FormFooter", "PageHeader", "PageFooter", "ReportHeader", "ReportFooter", "GroupHeader", "GroupFooter", "Section", "Detail",
+    "FormHeader",
+    "FormFooter",
+    "PageHeader",
+    "PageFooter",
+    "ReportHeader",
+    "ReportFooter",
+    "GroupHeader",
+    "GroupFooter",
+    "Section",
+    "Detail",
 ];
 
 /// Event properties that do not start with `On`.
 const BARE_EVENTS: &[&str] = &[
-    "AfterUpdate", "BeforeUpdate", "AfterInsert", "BeforeInsert", "AfterDelConfirm", "BeforeDelConfirm", "AfterLayout", "AfterRender",
-    "AfterFinalRender", "BeforeRender", "BeforeQuery", "BeforeScreenTip", "BeforeNavigate", "AfterNavigate",
+    "AfterUpdate",
+    "BeforeUpdate",
+    "AfterInsert",
+    "BeforeInsert",
+    "AfterDelConfirm",
+    "BeforeDelConfirm",
+    "AfterLayout",
+    "AfterRender",
+    "AfterFinalRender",
+    "BeforeRender",
+    "BeforeQuery",
+    "BeforeScreenTip",
+    "BeforeNavigate",
+    "AfterNavigate",
 ];
 
 #[derive(Debug, Clone)]
@@ -49,7 +70,12 @@ impl Control {
     /// equal to the design's per-type defaults; use [`Design::layout`] to fill those in.
     pub fn layout(&self) -> Layout {
         let n = |k: &str| self.get(k).and_then(|v| v.parse().ok());
-        Layout { left: n("Left"), top: n("Top"), width: n("Width"), height: n("Height") }
+        Layout {
+            left: n("Left"),
+            top: n("Top"),
+            width: n("Width"),
+            height: n("Height"),
+        }
     }
 }
 
@@ -78,7 +104,8 @@ pub struct Event {
 impl Event {
     /// The VBA procedure name Access binds for `[Event Procedure]`.
     pub fn procedure_name(&self) -> Option<String> {
-        (self.value == "[Event Procedure]").then(|| format!("{}_{}", self.owner.replace(' ', "_"), self.event))
+        (self.value == "[Event Procedure]")
+            .then(|| format!("{}_{}", self.owner.replace(' ', "_"), self.event))
     }
 }
 
@@ -94,12 +121,18 @@ pub struct Design {
     pub text: String,
 }
 
-static EMPTY: std::sync::LazyLock<BTreeMap<String, String>> = std::sync::LazyLock::new(BTreeMap::new);
+static EMPTY: std::sync::LazyLock<BTreeMap<String, String>> =
+    std::sync::LazyLock::new(BTreeMap::new);
 
 impl Design {
     /// Parse a form or report from SaveAsText text (a template part, or `Application.SaveAsText` output).
     pub fn parse(name: &str, kind: DesignKind, text: String) -> Design {
-        Design { name: name.to_string(), kind, document: saveastext::parse(&text), text }
+        Design {
+            name: name.to_string(),
+            kind,
+            document: saveastext::parse(&text),
+            text,
+        }
     }
 
     /// Parse an Access Services (web database) form or report from its AXL XML.
@@ -108,7 +141,12 @@ impl Design {
             DesignKind::Form => crate::axl::form_document(name, &xml)?,
             DesignKind::Report => crate::axl::report_document(name, &xml)?,
         };
-        Ok(Design { name: name.to_string(), kind, document, text: xml })
+        Ok(Design {
+            name: name.to_string(),
+            kind,
+            document,
+            text: xml,
+        })
     }
 
     /// True when the design came from AXL (web database) rather than SaveAsText.
@@ -142,13 +180,21 @@ impl Design {
 
     /// VBA source of the code-behind module, if the object has one.
     pub fn code_behind(&self) -> Option<&str> {
-        self.document.code_behind.as_deref().filter(|c| !c.trim().is_empty())
+        self.document
+            .code_behind
+            .as_deref()
+            .filter(|c| !c.trim().is_empty())
     }
 
     /// Per-control-type default properties from the design's anonymous defaults block.
     pub fn control_defaults(&self) -> BTreeMap<&str, &BTreeMap<String, String>> {
         let mut out = BTreeMap::new();
-        for block in self.root().into_iter().flat_map(|r| r.children.iter()).filter(|c| c.kind == "Block") {
+        for block in self
+            .root()
+            .into_iter()
+            .flat_map(|r| r.children.iter())
+            .filter(|c| c.kind == "Block")
+        {
             for d in &block.children {
                 if d.get("Name").is_none() && !SECTION_KINDS.contains(&d.kind.as_str()) {
                     out.insert(d.kind.as_str(), &d.properties);
@@ -218,7 +264,11 @@ impl Design {
 fn embedded_macros_of(node: &Node) -> BTreeMap<String, Macro> {
     node.children
         .iter()
-        .filter_map(|c| c.kind.strip_suffix("EmMacro").map(|ev| (ev.trim_start_matches("On").to_string(), c)))
+        .filter_map(|c| {
+            c.kind
+                .strip_suffix("EmMacro")
+                .map(|ev| (ev.trim_start_matches("On").to_string(), c))
+        })
         .map(|(event, c)| (event.clone(), Macro::from_node(&event, c)))
         .collect()
 }
@@ -233,7 +283,11 @@ fn collect_events(owner: &str, props: &BTreeMap<String, String>, out: &mut Vec<E
             _ if BARE_EVENTS.contains(&k.as_str()) => k.as_str(),
             _ => continue,
         };
-        out.push(Event { owner: owner.to_string(), event: event.to_string(), value: v.clone() });
+        out.push(Event {
+            owner: owner.to_string(),
+            event: event.to_string(),
+            value: v.clone(),
+        });
     }
 }
 
@@ -247,14 +301,24 @@ fn walk(node: &Node, section: &str, parent: Option<&str>, out: &mut Vec<Control>
     if node.kind.ends_with("EmMacro") {
         return;
     }
-    let Some(name) = node.get("Name").map(String::from) else { return };
+    let Some(name) = node.get("Name").map(String::from) else {
+        return;
+    };
     let is_section = SECTION_KINDS.contains(&node.kind.as_str());
-    let section_name = if is_section { name.clone() } else { section.to_string() };
+    let section_name = if is_section {
+        name.clone()
+    } else {
+        section.to_string()
+    };
     out.push(Control {
         name: name.clone(),
         control_type: node.kind.clone(),
         section: section_name.clone(),
-        parent: if is_section { None } else { parent.map(String::from) },
+        parent: if is_section {
+            None
+        } else {
+            parent.map(String::from)
+        },
         properties: node.properties.clone(),
         embedded_macros: embedded_macros_of(node),
     });
@@ -277,19 +341,55 @@ mod tests {
         assert_eq!(d.header()["Version"], "21");
         let ctrls = d.controls();
         let names: Vec<&str> = ctrls.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, vec!["FormHeader", "lblTitle", "Detail", "tabMain", "pgOne", "cmdSave"]);
+        assert_eq!(
+            names,
+            vec![
+                "FormHeader",
+                "lblTitle",
+                "Detail",
+                "tabMain",
+                "pgOne",
+                "cmdSave"
+            ]
+        );
         let save = ctrls.iter().find(|c| c.name == "cmdSave").unwrap();
         assert_eq!(save.section, "Detail");
         assert_eq!(save.parent.as_deref(), Some("pgOne"));
-        assert_eq!(save.layout(), Layout { left: Some(100), top: Some(200), width: Some(1000), height: Some(300) });
+        assert_eq!(
+            save.layout(),
+            Layout {
+                left: Some(100),
+                top: Some(200),
+                width: Some(1000),
+                height: Some(300)
+            }
+        );
         let events = d.events();
-        assert!(events.iter().any(|e| e.owner == "Form" && e.event == "Load"));
-        assert!(events.iter().any(|e| e.owner == "Form" && e.event == "AfterUpdate"));
-        let click = events.iter().find(|e| e.owner == "cmdSave" && e.event == "Click").unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.owner == "Form" && e.event == "Load")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.owner == "Form" && e.event == "AfterUpdate")
+        );
+        let click = events
+            .iter()
+            .find(|e| e.owner == "cmdSave" && e.event == "Click")
+            .unwrap();
         assert_eq!(click.procedure_name().as_deref(), Some("cmdSave_Click"));
-        assert!(events.iter().any(|e| e.event == "DblClick" && e.value == "[Embedded Macro]"));
+        assert!(
+            events
+                .iter()
+                .any(|e| e.event == "DblClick" && e.value == "[Embedded Macro]")
+        );
         let macros = d.embedded_macros();
-        assert_eq!(macros["cmdSave.DblClick"].actions[0].arguments, vec!["rptX"]);
+        assert_eq!(
+            macros["cmdSave.DblClick"].actions[0].arguments,
+            vec!["rptX"]
+        );
         assert!(d.code_behind().unwrap().contains("cmdSave_Click"));
     }
 }

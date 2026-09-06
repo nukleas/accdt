@@ -90,40 +90,129 @@ pub struct VbaReference {
 impl VbaReference {
     /// Library name for well-known type libraries.
     pub fn known_name(&self) -> Option<&'static str> {
-        KNOWN.iter().find(|(g, _, _)| g.eq_ignore_ascii_case(&self.guid)).map(|(_, n, _)| *n)
+        KNOWN
+            .iter()
+            .find(|(g, _, _)| g.eq_ignore_ascii_case(&self.guid))
+            .map(|(_, n, _)| *n)
     }
 
     /// True for libraries that only ever shipped as 32-bit (they cannot load in 64-bit Office).
     pub fn is_32bit_only(&self) -> bool {
-        KNOWN.iter().find(|(g, _, _)| g.eq_ignore_ascii_case(&self.guid)).is_some_and(|(_, _, b)| *b)
+        KNOWN
+            .iter()
+            .find(|(g, _, _)| g.eq_ignore_ascii_case(&self.guid))
+            .is_some_and(|(_, _, b)| *b)
     }
 }
 
 const KNOWN: &[(&str, &str, bool)] = &[
-    ("{000204EF-0000-0000-C000-000000000046}", "Visual Basic For Applications", false),
-    ("{4AFFC9A0-5F99-101B-AF4E-00AA003F0F07}", "Microsoft Access Object Library", false),
-    ("{00020430-0000-0000-C000-000000000046}", "OLE Automation (stdole)", false),
-    ("{4AC9E1DA-5BAD-4AC7-86E3-24F4CDCECA28}", "Microsoft Office Access database engine Object Library (ACE DAO)", false),
-    ("{00025E01-0000-0000-C000-000000000046}", "Microsoft DAO 3.6 Object Library", true),
-    ("{2DF8D04C-5BFA-101B-BDE5-00AA0044DE52}", "Microsoft Office Object Library", false),
-    ("{00062FFF-0000-0000-C000-000000000046}", "Microsoft Outlook Object Library", false),
-    ("{00020813-0000-0000-C000-000000000046}", "Microsoft Excel Object Library", false),
-    ("{00020905-0000-0000-C000-000000000046}", "Microsoft Word Object Library", false),
-    ("{420B2830-E718-11CF-893D-00A0C9054228}", "Microsoft Scripting Runtime", false),
-    ("{B691E011-1797-432E-907A-4D8C69339129}", "Microsoft ActiveX Data Objects 6.1 Library", false),
-    ("{2A75196C-D9EB-4129-B803-931327F72D5C}", "Microsoft ActiveX Data Objects 2.8 Library", false),
-    ("{0D452EE1-E08F-101A-852E-02608C4D0BB4}", "Microsoft Forms 2.0 Object Library", false),
-    ("{831FDD16-0C5C-11D2-A9FC-0000F8754DA1}", "Microsoft Windows Common Controls 6.0 (MSCOMCTL.OCX)", true),
-    ("{86CF1D34-0C5F-11D2-A9FC-0000F8754DA1}", "Microsoft Windows Common Controls-2 6.0 (MSCOMCT2.OCX)", true),
-    ("{8E27C92E-1264-101C-8A2F-040224009C02}", "Microsoft Calendar Control (MSCAL.OCX)", true),
-    ("{5E9E78A0-531B-11CF-91F6-C2863C385E30}", "Microsoft FlexGrid Control 6.0 (MSFLXGRD.OCX)", true),
-    ("{648A5603-2C6E-101B-82B6-000000000014}", "Microsoft Common Dialog Control 6.0 (COMDLG32.OCX)", true),
-    ("{F5078F18-C551-11D3-89B9-0000F81FE221}", "Microsoft XML, v6.0", false),
-    ("{3F4DACA7-160D-11D2-A8E9-00104B365C9F}", "Microsoft VBScript Regular Expressions 5.5", false),
+    (
+        "{000204EF-0000-0000-C000-000000000046}",
+        "Visual Basic For Applications",
+        false,
+    ),
+    (
+        "{4AFFC9A0-5F99-101B-AF4E-00AA003F0F07}",
+        "Microsoft Access Object Library",
+        false,
+    ),
+    (
+        "{00020430-0000-0000-C000-000000000046}",
+        "OLE Automation (stdole)",
+        false,
+    ),
+    (
+        "{4AC9E1DA-5BAD-4AC7-86E3-24F4CDCECA28}",
+        "Microsoft Office Access database engine Object Library (ACE DAO)",
+        false,
+    ),
+    (
+        "{00025E01-0000-0000-C000-000000000046}",
+        "Microsoft DAO 3.6 Object Library",
+        true,
+    ),
+    (
+        "{2DF8D04C-5BFA-101B-BDE5-00AA0044DE52}",
+        "Microsoft Office Object Library",
+        false,
+    ),
+    (
+        "{00062FFF-0000-0000-C000-000000000046}",
+        "Microsoft Outlook Object Library",
+        false,
+    ),
+    (
+        "{00020813-0000-0000-C000-000000000046}",
+        "Microsoft Excel Object Library",
+        false,
+    ),
+    (
+        "{00020905-0000-0000-C000-000000000046}",
+        "Microsoft Word Object Library",
+        false,
+    ),
+    (
+        "{420B2830-E718-11CF-893D-00A0C9054228}",
+        "Microsoft Scripting Runtime",
+        false,
+    ),
+    (
+        "{B691E011-1797-432E-907A-4D8C69339129}",
+        "Microsoft ActiveX Data Objects 6.1 Library",
+        false,
+    ),
+    (
+        "{2A75196C-D9EB-4129-B803-931327F72D5C}",
+        "Microsoft ActiveX Data Objects 2.8 Library",
+        false,
+    ),
+    (
+        "{0D452EE1-E08F-101A-852E-02608C4D0BB4}",
+        "Microsoft Forms 2.0 Object Library",
+        false,
+    ),
+    (
+        "{831FDD16-0C5C-11D2-A9FC-0000F8754DA1}",
+        "Microsoft Windows Common Controls 6.0 (MSCOMCTL.OCX)",
+        true,
+    ),
+    (
+        "{86CF1D34-0C5F-11D2-A9FC-0000F8754DA1}",
+        "Microsoft Windows Common Controls-2 6.0 (MSCOMCT2.OCX)",
+        true,
+    ),
+    (
+        "{8E27C92E-1264-101C-8A2F-040224009C02}",
+        "Microsoft Calendar Control (MSCAL.OCX)",
+        true,
+    ),
+    (
+        "{5E9E78A0-531B-11CF-91F6-C2863C385E30}",
+        "Microsoft FlexGrid Control 6.0 (MSFLXGRD.OCX)",
+        true,
+    ),
+    (
+        "{648A5603-2C6E-101B-82B6-000000000014}",
+        "Microsoft Common Dialog Control 6.0 (COMDLG32.OCX)",
+        true,
+    ),
+    (
+        "{F5078F18-C551-11D3-89B9-0000F81FE221}",
+        "Microsoft XML, v6.0",
+        false,
+    ),
+    (
+        "{3F4DACA7-160D-11D2-A8E9-00104B365C9F}",
+        "Microsoft VBScript Regular Expressions 5.5",
+        false,
+    ),
 ];
 
 fn child_text<'a>(node: roxmltree::Node<'a, 'a>, name: &str) -> Option<String> {
-    node.children().find(|c| c.is_element() && c.tag_name().name() == name).and_then(|c| c.text()).map(|t| t.trim().to_string())
+    node.children()
+        .find(|c| c.is_element() && c.tag_name().name() == name)
+        .and_then(|c| c.text())
+        .map(|t| t.trim().to_string())
 }
 
 pub(crate) fn parse_template(part: &str, bytes: &[u8]) -> crate::Result<TemplateInfo> {
@@ -139,9 +228,11 @@ pub(crate) fn parse_template(part: &str, bytes: &[u8]) -> crate::Result<Template
         ui_locale: child_text(root, "UILocale"),
         collating_order: child_text(root, "CollatingOrder"),
         flip_right_to_left: child_text(root, "FlipRightToLeft").is_some_and(|v| v == "1"),
-        perform_localization_fixup: child_text(root, "PerformLocalizationFixup").is_some_and(|v| v == "1"),
+        perform_localization_fixup: child_text(root, "PerformLocalizationFixup")
+            .is_some_and(|v| v == "1"),
         perform_font_fixup: child_text(root, "PerformFontFixup").is_some_and(|v| v == "1"),
-        variation_identifier: child_text(root, "VariationIdentifier").map(|v| v.trim_matches('"').to_string()),
+        variation_identifier: child_text(root, "VariationIdentifier")
+            .map(|v| v.trim_matches('"').to_string()),
     })
 }
 
@@ -179,18 +270,25 @@ pub(crate) fn parse_relationships(part: &str, bytes: &[u8]) -> crate::Result<Vec
     let xml = text::decode_xml(bytes);
     let doc = text::parse_xml(part, &xml)?;
     let mut out: Vec<Relationship> = Vec::new();
-    for row in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "MSysRelationships") {
+    for row in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "MSysRelationships")
+    {
         let get = |k: &str| child_text(row, k).unwrap_or_default();
         let name = get("szRelationship");
         let pair = (get("szColumn"), get("szReferencedColumn"));
         let position: usize = get("icolumn").parse().unwrap_or(0);
         if position >= 255 {
-            return Err(crate::Error::Invalid { part: part.to_string(), reason: format!("relationship {name} has column position {position}") });
+            return Err(crate::Error::Invalid {
+                part: part.to_string(),
+                reason: format!("relationship {name} has column position {position}"),
+            });
         }
         match out.iter_mut().find(|r| r.name == name) {
             Some(r) => {
                 if position >= r.columns.len() {
-                    r.columns.resize(position + 1, (String::new(), String::new()));
+                    r.columns
+                        .resize(position + 1, (String::new(), String::new()));
                 }
                 r.columns[position] = pair;
             }
@@ -218,8 +316,12 @@ pub(crate) fn parse_references(part: &str, bytes: &[u8]) -> crate::Result<Vec<Vb
         .filter(|n| n.is_element() && n.tag_name().name() == "VBAReference")
         .map(|n| VbaReference {
             guid: child_text(n, "GUID").unwrap_or_default(),
-            major: child_text(n, "MajorVer").and_then(|v| v.parse().ok()).unwrap_or(0),
-            minor: child_text(n, "MinorVer").and_then(|v| v.parse().ok()).unwrap_or(0),
+            major: child_text(n, "MajorVer")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            minor: child_text(n, "MinorVer")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
         })
         .collect())
 }

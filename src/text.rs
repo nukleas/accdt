@@ -39,7 +39,10 @@ pub fn unescape_xml_name(name: &str) -> String {
         // `_xHHHH_` is seven ASCII bytes; check bytes so multi-byte characters never get sliced.
         let b = tail.as_bytes();
         let is_escape = b.len() >= 7 && b[2..6].iter().all(u8::is_ascii_hexdigit) && b[6] == b'_';
-        let code = is_escape.then(|| u32::from_str_radix(&tail[2..6], 16).ok()).flatten().and_then(char::from_u32);
+        let code = is_escape
+            .then(|| u32::from_str_radix(&tail[2..6], 16).ok())
+            .flatten()
+            .and_then(char::from_u32);
         if let Some(c) = code {
             out.push(c);
             rest = &tail[7..];
@@ -53,7 +56,10 @@ pub fn unescape_xml_name(name: &str) -> String {
 }
 
 pub(crate) fn parse_xml<'a>(part: &str, text: &'a str) -> crate::Result<roxmltree::Document<'a>> {
-    roxmltree::Document::parse(text).map_err(|source| crate::Error::Xml { part: part.to_string(), source })
+    roxmltree::Document::parse(text).map_err(|source| crate::Error::Xml {
+        part: part.to_string(),
+        source,
+    })
 }
 
 #[cfg(test)]

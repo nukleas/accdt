@@ -74,7 +74,10 @@ pub struct Column {
 
 impl Column {
     pub fn property(&self, name: &str) -> Option<&str> {
-        self.properties.iter().find(|(n, _, _)| n == name).map(|(_, _, v)| v.as_str())
+        self.properties
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .map(|(_, _, v)| v.as_str())
     }
     pub fn description(&self) -> Option<&str> {
         self.property("Description")
@@ -119,7 +122,13 @@ impl Value {
                 .iter()
                 .map(|r| {
                     r.iter()
-                        .map(|(k, v)| if k == "FileData" { format!("{k}=<{} base64 chars>", v.len()) } else { format!("{k}={v}") })
+                        .map(|(k, v)| {
+                            if k == "FileData" {
+                                format!("{k}=<{} base64 chars>", v.len())
+                            } else {
+                                format!("{k}={v}")
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .join("; ")
                 })
@@ -165,7 +174,10 @@ impl Table {
     }
 
     pub fn property(&self, name: &str) -> Option<&str> {
-        self.properties.iter().find(|(n, _, _)| n == name).map(|(_, _, v)| v.as_str())
+        self.properties
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .map(|(_, _, v)| v.as_str())
     }
 
     /// True for a SharePoint list link; its rows live on the server, not in the template.
@@ -175,16 +187,26 @@ impl Table {
 
     /// Column by name, case-insensitively (Access names are case-insensitive).
     pub fn column(&self, name: &str) -> Option<&Column> {
-        self.columns.iter().find(|c| c.name.eq_ignore_ascii_case(name))
+        self.columns
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(name))
     }
 
     /// RFC 4180 CSV with a header row; every value quoted.
     pub fn to_csv(&self) -> String {
         let q = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
-        let mut out = self.columns.iter().map(|c| q(&c.name)).collect::<Vec<_>>().join(",");
+        let mut out = self
+            .columns
+            .iter()
+            .map(|c| q(&c.name))
+            .collect::<Vec<_>>()
+            .join(",");
         out.push('\n');
         for row in &self.rows {
-            let line: Vec<String> = row.iter().map(|v| v.as_ref().map(|v| q(&v.to_csv_text())).unwrap_or_default()).collect();
+            let line: Vec<String> = row
+                .iter()
+                .map(|v| v.as_ref().map(|v| q(&v.to_csv_text())).unwrap_or_default())
+                .collect();
             out.push_str(&line.join(","));
             out.push('\n');
         }
@@ -198,9 +220,23 @@ pub(crate) fn parse_schema(part: &str, name: &str, bytes: &[u8]) -> crate::Resul
     let table_el = doc
         .descendants()
         .filter(|n| n.has_tag_name((XSD, "element")))
-        .find(|n| n.attribute("name").is_some_and(|a| a != "dataroot") && n.parent().is_some_and(|p| p.has_tag_name((XSD, "schema"))))
-        .ok_or_else(|| crate::Error::Invalid { part: part.to_string(), reason: "no table element in schema".into() })?;
-    let mut table = Table { name: name.to_string(), columns: Vec::new(), indexes: Vec::new(), properties: Vec::new(), sharepoint: None, rows: Vec::new(), has_data_part: false };
+        .find(|n| {
+            n.attribute("name").is_some_and(|a| a != "dataroot")
+                && n.parent().is_some_and(|p| p.has_tag_name((XSD, "schema")))
+        })
+        .ok_or_else(|| crate::Error::Invalid {
+            part: part.to_string(),
+            reason: "no table element in schema".into(),
+        })?;
+    let mut table = Table {
+        name: name.to_string(),
+        columns: Vec::new(),
+        indexes: Vec::new(),
+        properties: Vec::new(),
+        sharepoint: None,
+        rows: Vec::new(),
+        has_data_part: false,
+    };
     for n in table_el.descendants() {
         if n.has_tag_name((OD, "index")) {
             let key = n.attribute("index-key").unwrap_or("");
@@ -209,7 +245,12 @@ pub(crate) fn parse_schema(part: &str, name: &str, bytes: &[u8]) -> crate::Resul
                 columns: key.split_whitespace().map(unescape_xml_name).collect(),
                 primary: n.attribute("primary") == Some("yes"),
                 unique: n.attribute("unique") == Some("yes"),
-                order: n.attribute("order").unwrap_or("").split_whitespace().map(String::from).collect(),
+                order: n
+                    .attribute("order")
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .map(String::from)
+                    .collect(),
             });
         } else if n.has_tag_name((OD, "tableProperty")) {
             table.properties.push((
@@ -219,7 +260,11 @@ pub(crate) fn parse_schema(part: &str, name: &str, bytes: &[u8]) -> crate::Resul
             ));
         }
     }
-    if table.properties.iter().any(|(n, _, _)| n.starts_with("WSS")) {
+    if table
+        .properties
+        .iter()
+        .any(|(n, _, _)| n.starts_with("WSS"))
+    {
         table.sharepoint = Some(SharePointList {
             template_id: table.property("WSSTemplateID").and_then(|v| v.parse().ok()),
             root_folder: table.property("WSSRootFolder").map(String::from),
@@ -230,7 +275,9 @@ pub(crate) fn parse_schema(part: &str, name: &str, bytes: &[u8]) -> crate::Resul
             document_library: table.property("DocumentLibrary") == Some("1"),
         });
     }
-    let sequence = table_el.descendants().find(|n| n.has_tag_name((XSD, "sequence")));
+    let sequence = table_el
+        .descendants()
+        .find(|n| n.has_tag_name((XSD, "sequence")));
     if let Some(seq) = sequence {
         for col in seq.children().filter(|n| n.has_tag_name((XSD, "element"))) {
             let mut properties = Vec::new();
@@ -248,7 +295,10 @@ pub(crate) fn parse_schema(part: &str, name: &str, bytes: &[u8]) -> crate::Resul
             }
             table.columns.push(Column {
                 name: unescape_xml_name(col.attribute("name").unwrap_or("")),
-                jet_type: col.attribute((OD, "jetType")).map(JetType::parse).unwrap_or(JetType::Other(String::new())),
+                jet_type: col
+                    .attribute((OD, "jetType"))
+                    .map(JetType::parse)
+                    .unwrap_or(JetType::Other(String::new())),
                 sql_type: col.attribute((OD, "sqlSType")).map(String::from),
                 required: col.attribute((OD, "nonNullable")) == Some("yes"),
                 auto_increment: col.attribute((OD, "autoUnique")) == Some("yes"),
@@ -268,7 +318,10 @@ pub(crate) fn parse_data(part: &str, table: &mut Table, bytes: &[u8]) -> crate::
     let xml = text::decode_xml(bytes);
     let doc = text::parse_xml(part, &xml)?;
     table.has_data_part = true;
-    let Some(dataroot) = doc.descendants().find(|n| n.is_element() && n.tag_name().name() == "dataroot") else {
+    let Some(dataroot) = doc
+        .descendants()
+        .find(|n| n.is_element() && n.tag_name().name() == "dataroot")
+    else {
         return Ok(());
     };
     for row in dataroot.children().filter(|n| n.is_element()) {
@@ -300,7 +353,14 @@ pub(crate) fn parse_data(part: &str, table: &mut Table, bytes: &[u8]) -> crate::
                 let record: BTreeMap<String, String> = cell
                     .children()
                     .filter(|c| c.is_element())
-                    .map(|c| (unescape_xml_name(c.tag_name().name()), c.text().map(|t| t.split_whitespace().collect::<String>()).unwrap_or_default()))
+                    .map(|c| {
+                        (
+                            unescape_xml_name(c.tag_name().name()),
+                            c.text()
+                                .map(|t| t.split_whitespace().collect::<String>())
+                                .unwrap_or_default(),
+                        )
+                    })
                     .collect();
                 match &mut cells[index] {
                     Some(Value::Complex(records)) => records.push(record),

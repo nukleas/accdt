@@ -7,7 +7,11 @@ use accdt::{ObjectKind, Package};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "accdt", version, about = "Read Microsoft Access template packages (.accdt) without Access")]
+#[command(
+    name = "accdt",
+    version,
+    about = "Read Microsoft Access template packages (.accdt) without Access"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -20,9 +24,17 @@ enum Cmd {
     /// List objects (`kind<TAB>name`)
     Ls { package: PathBuf },
     /// Print one object: table as CSV, query as SQL, others as their text
-    Cat { package: PathBuf, kind: String, name: String },
+    Cat {
+        package: PathBuf,
+        kind: String,
+        name: String,
+    },
     /// Print an object as JSON (design controls, query definition, table schema, …)
-    Json { package: PathBuf, kind: String, name: String },
+    Json {
+        package: PathBuf,
+        kind: String,
+        name: String,
+    },
     /// Write every object to a directory (csv, sql, txt, bas, json)
     Export { package: PathBuf, dir: PathBuf },
 }
@@ -50,15 +62,28 @@ struct Namer {
 
 impl Namer {
     fn new() -> Namer {
-        Namer { used: Default::default(), manifest: Default::default() }
+        Namer {
+            used: Default::default(),
+            manifest: Default::default(),
+        }
     }
     fn file(&mut self, dir: &str, object: &str) -> String {
-        let base: String = object.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).collect();
+        let base: String = object
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
         let key = format!("{dir}/{}", base.to_lowercase());
         let n = self.used.entry(key).or_insert(0);
         *n += 1;
         let name = if *n == 1 { base } else { format!("{base}~{n}") };
-        self.manifest.insert(format!("{dir}/{name}"), object.to_string());
+        self.manifest
+            .insert(format!("{dir}/{name}"), object.to_string());
         name
     }
 }
@@ -79,32 +104,88 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             if let Ok(t) = pkg.template() {
-                println!("required access version: {}  type: {}", t.required_access_version.unwrap_or_default(), t.template_type.unwrap_or_default());
+                println!(
+                    "required access version: {}  type: {}",
+                    t.required_access_version.unwrap_or_default(),
+                    t.template_type.unwrap_or_default()
+                );
             }
             for p in pkg.database_properties()? {
-                if matches!(p.name.as_str(), "AccessVersion" | "AppTitle" | "StartUpForm" | "StartUpShowDBWindow" | "AllowBypassKey") {
+                if matches!(
+                    p.name.as_str(),
+                    "AccessVersion"
+                        | "AppTitle"
+                        | "StartUpForm"
+                        | "StartUpShowDBWindow"
+                        | "AllowBypassKey"
+                ) {
                     println!("{}: {}", p.name, p.value);
                 }
             }
-            for k in [ObjectKind::Table, ObjectKind::Query, ObjectKind::Form, ObjectKind::Report, ObjectKind::Macro, ObjectKind::Module, ObjectKind::Link] {
+            for k in [
+                ObjectKind::Table,
+                ObjectKind::Query,
+                ObjectKind::Form,
+                ObjectKind::Report,
+                ObjectKind::Macro,
+                ObjectKind::Module,
+                ObjectKind::Link,
+            ] {
                 let n = pkg.objects_of(k).count();
                 if n > 0 || k != ObjectKind::Link {
-                    let axl = pkg.objects_of(k).filter(|o| o.format == accdt::PartFormat::Axl).count();
+                    let axl = pkg
+                        .objects_of(k)
+                        .filter(|o| o.format == accdt::PartFormat::Axl)
+                        .count();
                     let variations: usize = pkg.objects_of(k).map(|o| o.variations.len()).sum();
-                    println!("{:<8} {}{}{}", k.as_str(), n, if axl > 0 { format!(" ({axl} axl)") } else { String::new() }, if variations > 0 { format!(" (+{variations} variations)") } else { String::new() });
+                    println!(
+                        "{:<8} {}{}{}",
+                        k.as_str(),
+                        n,
+                        if axl > 0 {
+                            format!(" ({axl} axl)")
+                        } else {
+                            String::new()
+                        },
+                        if variations > 0 {
+                            format!(" (+{variations} variations)")
+                        } else {
+                            String::new()
+                        }
+                    );
                 }
             }
             for t in pkg.tables()? {
                 if let Some(sp) = &t.sharepoint {
-                    println!("sharepoint list: {} (template {})", t.name, sp.template_id.map(|i| i.to_string()).unwrap_or_default());
+                    println!(
+                        "sharepoint list: {} (template {})",
+                        t.name,
+                        sp.template_id.map(|i| i.to_string()).unwrap_or_default()
+                    );
                 }
             }
             for l in pkg.list_definitions()? {
-                println!("list definition: {} (template {}, {} fields)", l.list_name, l.template_id.map(|i| i.to_string()).unwrap_or_default(), l.fields.len());
+                println!(
+                    "list definition: {} (template {}, {} fields)",
+                    l.list_name,
+                    l.template_id.map(|i| i.to_string()).unwrap_or_default(),
+                    l.fields.len()
+                );
             }
             println!("relationships: {}", pkg.relationships()?.len());
             for r in pkg.vba_references()? {
-                println!("reference: {} {}.{} {}{}", r.guid, r.major, r.minor, r.known_name().unwrap_or("?"), if r.is_32bit_only() { " [32-bit only]" } else { "" });
+                println!(
+                    "reference: {} {}.{} {}{}",
+                    r.guid,
+                    r.major,
+                    r.minor,
+                    r.known_name().unwrap_or("?"),
+                    if r.is_32bit_only() {
+                        " [32-bit only]"
+                    } else {
+                        ""
+                    }
+                );
             }
         }
         Cmd::Ls { package } => {
@@ -113,7 +194,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}\t{}", o.kind.as_str(), o.name);
             }
         }
-        Cmd::Cat { package, kind: k, name } => {
+        Cmd::Cat {
+            package,
+            kind: k,
+            name,
+        } => {
             let pkg = Package::open(&package)?;
             let k = kind(&k)?;
             match k {
@@ -121,32 +206,49 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ObjectKind::Query => {
                     let sql = pkg.query(&name)?.to_sql();
                     if !sql.is_executable() {
-                        eprintln!("accdt: {} has no executable SQL ({:?}); printing the definition", name, sql.source);
+                        eprintln!(
+                            "accdt: {} has no executable SQL ({:?}); printing the definition",
+                            name, sql.source
+                        );
                     }
                     println!("{}", sql.text);
                 }
                 _ => {
-                    let o = pkg.object(k, &name).ok_or_else(|| format!("no {} named {name}", k.as_str()))?;
+                    let o = pkg
+                        .object(k, &name)
+                        .ok_or_else(|| format!("no {} named {name}", k.as_str()))?;
                     print!("{}", pkg.object_text(o)?);
                 }
             }
         }
-        Cmd::Json { package, kind: k, name } => {
+        Cmd::Json {
+            package,
+            kind: k,
+            name,
+        } => {
             let pkg = Package::open(&package)?;
             let k = kind(&k)?;
             let json = match k {
                 ObjectKind::Table => serde_json::to_string_pretty(&pkg.table(&name)?)?,
                 ObjectKind::Query => {
                     let q = pkg.query(&name)?;
-                    serde_json::to_string_pretty(&serde_json::json!({"name": q.name, "definition": q.definition, "sql": q.to_sql()}))?
+                    serde_json::to_string_pretty(
+                        &serde_json::json!({"name": q.name, "definition": q.definition, "sql": q.to_sql()}),
+                    )?
                 }
                 ObjectKind::Form => serde_json::to_string_pretty(&design_json(&pkg.form(&name)?))?,
-                ObjectKind::Report => serde_json::to_string_pretty(&design_json(&pkg.report(&name)?))?,
+                ObjectKind::Report => {
+                    serde_json::to_string_pretty(&design_json(&pkg.report(&name)?))?
+                }
                 ObjectKind::Macro => serde_json::to_string_pretty(&pkg.ui_macro(&name)?)?,
                 ObjectKind::Module => serde_json::to_string_pretty(&pkg.module(&name)?)?,
                 ObjectKind::Link => {
-                    let o = pkg.object(k, &name).ok_or_else(|| format!("no link named {name}"))?;
-                    serde_json::to_string_pretty(&serde_json::json!({"name": o.name, "xml": pkg.object_text(o)?}))?
+                    let o = pkg
+                        .object(k, &name)
+                        .ok_or_else(|| format!("no link named {name}"))?;
+                    serde_json::to_string_pretty(
+                        &serde_json::json!({"name": o.name, "xml": pkg.object_text(o)?}),
+                    )?
                 }
             };
             println!("{json}");
@@ -161,12 +263,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             for t in pkg.tables()? {
                 let f = namer.file("tables", &t.name);
                 std::fs::write(dir.join("tables").join(format!("{f}.csv")), t.to_csv())?;
-                std::fs::write(dir.join("tables").join(format!("{f}.schema.json")), serde_json::to_vec_pretty(&t)?)?;
+                std::fs::write(
+                    dir.join("tables").join(format!("{f}.schema.json")),
+                    serde_json::to_vec_pretty(&t)?,
+                )?;
                 n += 1;
             }
             for q in pkg.queries()? {
                 let f = namer.file("queries", &q.name);
-                std::fs::write(dir.join("queries").join(format!("{f}.sql")), q.to_sql().text)?;
+                std::fs::write(
+                    dir.join("queries").join(format!("{f}.sql")),
+                    q.to_sql().text,
+                )?;
                 std::fs::write(dir.join("queries").join(format!("{f}.txt")), &q.text)?;
                 n += 1;
             }
@@ -174,7 +282,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 for d in designs {
                     let f = namer.file(sub, &d.name);
                     std::fs::write(dir.join(sub).join(format!("{f}.txt")), &d.text)?;
-                    std::fs::write(dir.join(sub).join(format!("{f}.json")), serde_json::to_vec_pretty(&design_json(&d))?)?;
+                    std::fs::write(
+                        dir.join(sub).join(format!("{f}.json")),
+                        serde_json::to_vec_pretty(&design_json(&d))?,
+                    )?;
                     if let Some(code) = d.code_behind() {
                         std::fs::write(dir.join(sub).join(format!("{f}.bas")), code)?;
                     }
@@ -184,7 +295,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             for m in pkg.macros()? {
                 let f = namer.file("macros", &m.name);
                 std::fs::write(dir.join("macros").join(format!("{f}.txt")), &m.text)?;
-                std::fs::write(dir.join("macros").join(format!("{f}.json")), serde_json::to_vec_pretty(&m)?)?;
+                std::fs::write(
+                    dir.join("macros").join(format!("{f}.json")),
+                    serde_json::to_vec_pretty(&m)?,
+                )?;
                 n += 1;
             }
             for m in pkg.modules()? {
@@ -192,10 +306,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 std::fs::write(dir.join("modules").join(format!("{f}.bas")), &m.source)?;
                 n += 1;
             }
-            std::fs::write(dir.join("names.json"), serde_json::to_vec_pretty(&namer.manifest)?)?;
-            std::fs::write(dir.join("relationships.json"), serde_json::to_vec_pretty(&pkg.relationships()?)?)?;
-            std::fs::write(dir.join("database-properties.json"), serde_json::to_vec_pretty(&pkg.database_properties()?)?)?;
-            std::fs::write(dir.join("vba-references.json"), serde_json::to_vec_pretty(&pkg.vba_references()?)?)?;
+            std::fs::write(
+                dir.join("names.json"),
+                serde_json::to_vec_pretty(&namer.manifest)?,
+            )?;
+            std::fs::write(
+                dir.join("relationships.json"),
+                serde_json::to_vec_pretty(&pkg.relationships()?)?,
+            )?;
+            std::fs::write(
+                dir.join("database-properties.json"),
+                serde_json::to_vec_pretty(&pkg.database_properties()?)?,
+            )?;
+            std::fs::write(
+                dir.join("vba-references.json"),
+                serde_json::to_vec_pretty(&pkg.vba_references()?)?,
+            )?;
             println!("exported {n} objects to {}", dir.display());
         }
     }

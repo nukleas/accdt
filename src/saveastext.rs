@@ -33,7 +33,11 @@ impl Node {
 
     /// All values for a key, in order.
     pub fn values(&self, key: &str) -> Vec<&str> {
-        self.entries.iter().filter(|(k, _)| k == key).map(|(_, v)| v.as_str()).collect()
+        self.entries
+            .iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+            .collect()
     }
 }
 
@@ -70,7 +74,11 @@ pub fn parse(text: &str) -> Document {
     let mut doc = Document::default();
     // Each open block, with whether it is a `Key = Begin` value block and its hex lines so far.
     let mut stack: Vec<(Node, bool, Vec<String>)> = Vec::new();
-    let mut lines = text.lines().map(|l| l.trim_end_matches('\r')).enumerate().peekable();
+    let mut lines = text
+        .lines()
+        .map(|l| l.trim_end_matches('\r'))
+        .enumerate()
+        .peekable();
     while let Some((idx, raw)) = lines.next() {
         let line_no = idx + 1;
         let t = raw.trim();
@@ -112,32 +120,55 @@ pub fn parse(text: &str) -> Document {
                     Some((parent, _, _)) => parent.children.push(node),
                     None => doc.blocks.push(node),
                 },
-                None => doc.warnings.push(format!("line {line_no}: End without a matching Begin")),
+                None => doc
+                    .warnings
+                    .push(format!("line {line_no}: End without a matching Begin")),
             }
             continue;
         }
         if let Some(kind) = t.strip_prefix("Begin") {
             let kind = kind.trim();
             if kind.is_empty() || kind.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                stack.push((Node { kind: if kind.is_empty() { "Block".into() } else { kind.into() }, ..Default::default() }, false, Vec::new()));
+                stack.push((
+                    Node {
+                        kind: if kind.is_empty() {
+                            "Block".into()
+                        } else {
+                            kind.into()
+                        },
+                        ..Default::default()
+                    },
+                    false,
+                    Vec::new(),
+                ));
                 continue;
             }
         }
         if t.starts_with("0x") {
             match stack.last_mut() {
                 Some((_, true, hex)) => hex.push(t.trim_end_matches(',').trim().to_string()),
-                _ => doc.warnings.push(format!("line {line_no}: hex data outside a value block")),
+                _ => doc
+                    .warnings
+                    .push(format!("line {line_no}: hex data outside a value block")),
             }
             continue;
         }
         let Some((key, value)) = t.split_once('=') else {
-            doc.warnings.push(format!("line {line_no}: unrecognised line {t:?}"));
+            doc.warnings
+                .push(format!("line {line_no}: unrecognised line {t:?}"));
             continue;
         };
         let key = normalize_key(key.trim());
         let value = value.trim();
         if value == "Begin" {
-            stack.push((Node { kind: key, ..Default::default() }, true, Vec::new()));
+            stack.push((
+                Node {
+                    kind: key,
+                    ..Default::default()
+                },
+                true,
+                Vec::new(),
+            ));
             continue;
         }
         let value = if let Some(inner) = quoted(value) {
@@ -167,7 +198,8 @@ pub fn parse(text: &str) -> Document {
         }
     }
     while let Some((node, _, _)) = stack.pop() {
-        doc.warnings.push(format!("unterminated block {:?}", node.kind));
+        doc.warnings
+            .push(format!("unterminated block {:?}", node.kind));
         match stack.last_mut() {
             Some((parent, _, _)) => parent.children.push(node),
             None => doc.blocks.push(node),
@@ -230,12 +262,24 @@ pub fn unescape(s: &str) -> String {
 
 /// Decode a hex-encoded property value (`0x0a0b…`, possibly from several joined lines).
 pub fn hex_bytes(v: &str) -> Option<Vec<u8>> {
-    let digits: Vec<u8> = v.replace("0x", "").bytes().filter(|b| !b.is_ascii_whitespace() && *b != b',').collect();
-    if digits.is_empty() || !digits.len().is_multiple_of(2) || !digits.iter().all(|b| b.is_ascii_hexdigit()) {
+    let digits: Vec<u8> = v
+        .replace("0x", "")
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace() && *b != b',')
+        .collect();
+    if digits.is_empty()
+        || !digits.len().is_multiple_of(2)
+        || !digits.iter().all(|b| b.is_ascii_hexdigit())
+    {
         return None;
     }
     let hex = |b: u8| (b as char).to_digit(16).unwrap() as u8;
-    Some(digits.chunks_exact(2).map(|p| hex(p[0]) << 4 | hex(p[1])).collect())
+    Some(
+        digits
+            .chunks_exact(2)
+            .map(|p| hex(p[0]) << 4 | hex(p[1]))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -262,7 +306,12 @@ mod tests {
         let text = "Begin Form\n    Caption =\"This form uses the \\\"new\\\" control, which is not available\"\n        \" in older versions.\\015\\012Second line \\\\ backslash\"\n    Width =100\nEnd\n";
         let doc = parse(text);
         let form = doc.block("Form").unwrap();
-        assert_eq!(form.get("Caption"), Some("This form uses the \"new\" control, which is not available in older versions.\r\nSecond line \\ backslash"));
+        assert_eq!(
+            form.get("Caption"),
+            Some(
+                "This form uses the \"new\" control, which is not available in older versions.\r\nSecond line \\ backslash"
+            )
+        );
         assert_eq!(form.get("Width"), Some("100"));
     }
 
@@ -274,14 +323,20 @@ mod tests {
         let button = &doc.blocks[0].children[0];
         assert_eq!(button.get("GUID"), Some("0x0102"));
         assert_eq!(button.get("Width"), Some("10"));
-        let em = button.children.iter().find(|c| c.kind == "OnClickEmMacro").unwrap();
+        let em = button
+            .children
+            .iter()
+            .find(|c| c.kind == "OnClickEmMacro")
+            .unwrap();
         assert_eq!(em.get("Version"), Some("196611"));
         assert_eq!(em.children[0].get("Action"), Some("OpenReport"));
     }
 
     #[test]
     fn keeps_repeated_keys_in_order() {
-        let doc = parse("Begin\n    NameMap =\"x\"\n    Name =\"a\"\n    Name =\"b\"\n    Argument =\"A\"\n    Argument =\"B\"\nEnd\n");
+        let doc = parse(
+            "Begin\n    NameMap =\"x\"\n    Name =\"a\"\n    Name =\"b\"\n    Argument =\"A\"\n    Argument =\"B\"\nEnd\n",
+        );
         assert_eq!(doc.blocks[0].values("Argument"), vec!["A", "B"]);
         assert_eq!(doc.blocks[0].values("Name"), vec!["a", "b"]);
         assert_eq!(doc.blocks[0].get("Name"), Some("a"));

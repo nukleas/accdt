@@ -24,12 +24,22 @@ impl Macro {
     /// Parse a macro from SaveAsText text.
     pub fn parse(name: &str, text: String) -> Macro {
         let doc = saveastext::parse(&text);
-        Macro { name: name.to_string(), version: doc.get("Version").map(String::from), actions: actions_of(&doc.blocks), text }
+        Macro {
+            name: name.to_string(),
+            version: doc.get("Version").map(String::from),
+            actions: actions_of(&doc.blocks),
+            text,
+        }
     }
 
     /// A macro embedded in a form or report design (an `On…EmMacro` block).
     pub fn from_node(name: &str, node: &Node) -> Macro {
-        Macro { name: name.to_string(), version: node.get("Version").map(String::from), actions: actions_of(&node.children), text: String::new() }
+        Macro {
+            name: name.to_string(),
+            version: node.get("Version").map(String::from),
+            actions: actions_of(&node.children),
+            text: String::new(),
+        }
     }
 }
 
@@ -56,6 +66,9 @@ mod tests {
         assert_eq!(m.actions.len(), 2);
         assert_eq!(m.actions[0].action, "OpenForm");
         assert_eq!(m.actions[0].arguments, vec!["frmStartup", "0"]);
-        assert_eq!(m.actions[0].condition.as_deref(), Some("Not [CurrentProject].[IsTrusted]"));
+        assert_eq!(
+            m.actions[0].condition.as_deref(),
+            Some("Not [CurrentProject].[IsTrusted]")
+        );
     }
 }
